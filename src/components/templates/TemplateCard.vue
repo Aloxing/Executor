@@ -13,8 +13,6 @@ const emit = defineEmits<{
   edit: []
   delete: []
   "toggle-select": []
-  "import-code": []
-  "import-parameter": []
   contextmenu: [event: MouseEvent]
 }>()
 
@@ -75,27 +73,13 @@ function onClick() {
     </p>
     <!-- Times -->
     <div
-      class="text-muted-foreground flex shrink-0 flex-col gap-0.5 text-[clamp(9px,1vw,10px)]"
+      class="text-muted-foreground flex shrink-0 items-center gap-3 text-[clamp(9px,1vw,10px)]"
     >
       <span>创建：{{ template.createdAt }}</span>
       <span>修改：{{ template.updatedAt }}</span>
     </div>
     <!-- Actions (hidden in batch selection mode) -->
     <div v-if="!selectMode" class="flex shrink-0 items-center gap-2">
-      <button
-        type="button"
-        class="hover:bg-muted inline-flex h-7 cursor-pointer items-center justify-center rounded-lg bg-muted/60 px-2.5 text-[clamp(10px,1.1vw,11px)] font-medium transition-colors duration-200 focus-visible:outline-none"
-        @click="emit('import-code')"
-      >
-        {{ template.codeImported ? "修改代码模板" : "导入代码模板" }}
-      </button>
-      <button
-        type="button"
-        class="hover:bg-muted inline-flex h-7 cursor-pointer items-center justify-center rounded-lg bg-muted/60 px-2.5 text-[clamp(10px,1.1vw,11px)] font-medium transition-colors duration-200 focus-visible:outline-none"
-        @click="emit('import-parameter')"
-      >
-        {{ template.parameterImported ? "修改参数模板" : "导入参数模板" }}
-      </button>
       <button
         type="button"
         class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-7 cursor-pointer items-center justify-center rounded-lg bg-muted/60 transition-colors duration-200 focus-visible:outline-none"

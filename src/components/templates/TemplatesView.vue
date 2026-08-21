@@ -186,6 +186,20 @@ function markImported(name: string, kind: "code" | "parameter") {
       : t
   )
 }
+
+function importCodeFromMenu() {
+  if (!menu.value) return
+  const template = menu.value.template
+  menu.value = null
+  importCode(template)
+}
+
+function importParameterFromMenu() {
+  if (!menu.value) return
+  const template = menu.value.template
+  menu.value = null
+  importParameter(template)
+}
 </script>
 
 <template>
@@ -286,8 +300,6 @@ function markImported(name: string, kind: "code" | "parameter") {
         @edit="editing = template"
         @delete="pendingDelete = [template.name]"
         @toggle-select="toggleSelect(template.name)"
-        @import-code="importCode(template)"
-        @import-parameter="importParameter(template)"
         @contextmenu="openMenu(template, $event)"
       />
     </div>
@@ -321,8 +333,11 @@ function markImported(name: string, kind: "code" | "parameter") {
       v-if="menu"
       :x="menu.x"
       :y="menu.y"
+      :template="menu.template"
       @close="menu = null"
       @open-dir="openInExplorerMenu"
+      @import-code="importCodeFromMenu"
+      @import-parameter="importParameterFromMenu"
     />
   </div>
 </template>
