@@ -91,3 +91,16 @@ export async function importParameterTemplate(
 ): Promise<void> {
   return invoke("import_parameter_template", { name, sourceFile })
 }
+
+/** Reads the template's parameter JSON content for in-app editing. */
+export async function readParameterJson(name: string): Promise<string> {
+  return invoke<string>("read_parameter_json", { name })
+}
+
+/** Saves edited parameter JSON content (validated server-side). */
+export async function writeParameterJson(
+  name: string,
+  content: string
+): Promise<void> {
+  return invoke("write_parameter_json", { name, content })
+}

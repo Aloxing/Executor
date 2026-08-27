@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Executor",
-        "width": 1100,
-        "height": 720,
+        "width": 1280,
+        "height": 800,
         "minWidth": 880,
         "minHeight": 560,
         "decorations": false,

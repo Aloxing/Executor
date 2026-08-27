@@ -2,11 +2,13 @@
 import { computed, nextTick, onMounted, ref } from "vue"
 import AppTitleBar from "./components/AppTitleBar.vue"
 import FloatingNavBar, { type NavKey } from "./components/FloatingNavBar.vue"
+import ImportView from "./components/import/ImportView.vue"
 import SettingsModal from "./components/SettingsModal.vue"
 import TemplatesView from "./components/templates/TemplatesView.vue"
 import ToastContainer from "./components/ToastContainer.vue"
 import { loadSettings, settings } from "./lib/settings"
 import { applyThemeMode } from "./lib/theme"
+import { ensureWorkspaceAreas } from "./lib/workspace"
 
 const activeView = ref<NavKey>("import")
 const showSettings = ref(false)
@@ -26,6 +28,10 @@ onMounted(async () => {
   // Load persisted settings (close behavior etc.) before the window shows.
   await loadSettings()
   applyThemeMode(settings.themeMode)
+  // Repair/create the page area folders of an existing workspace.
+  if (settings.workspacePath) {
+    ensureWorkspaceAreas().catch(() => {})
+  }
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window")
     const win = getCurrentWindow()
@@ -55,6 +61,7 @@ onMounted(async () => {
     </AppTitleBar>
     <main class="min-h-0 flex-1 overflow-auto p-[17px]">
       <TemplatesView v-if="activeView === 'templates'" />
+      <ImportView v-else-if="activeView === 'import'" />
       <section v-else class="flex h-full flex-col gap-3">
         <!-- Page title on its own row, aligned left -->
         <h1 class="shrink-0 text-[clamp(14px,1.6vw,16px)] font-semibold">

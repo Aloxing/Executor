@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Manager, WindowEvent};
 
-use crate::tray::setup_tray;
-use crate::webview::{set_webview_memory_level, MemoryUsageLevel};
+use crate::core::tray::setup_tray;
+use crate::core::webview::{set_webview_memory_level, MemoryUsageLevel};
 
 /// Shared flag marking that the window visibility has been handled by the
 /// user (close-to-tray) or by the frontend show flow, so the 1.5s fallback

@@ -4,6 +4,8 @@ import { FolderOpen } from "lucide-vue-next"
 import SettingSection from "./SettingSection.vue"
 import SettingCard from "./SettingCard.vue"
 import { getDataDir, saveSettings, setDataDir, settings } from "@/lib/settings"
+import { showToast } from "@/lib/toast"
+import { ensureWorkspaceAreas } from "@/lib/workspace"
 
 const dataDir = ref("")
 const changing = ref(false)
@@ -53,6 +55,13 @@ async function browseWorkspace() {
     })
     if (selected) {
       settings.workspacePath = selected as string
+      // Initialize the page area folders in the new workspace.
+      try {
+        await ensureWorkspaceAreas()
+        showToast("工作空间目录初始化成功", "success")
+      } catch (e) {
+        showToast(typeof e === "string" ? e : "工作空间初始化失败")
+      }
     }
   } catch {
     // Not running inside Tauri or dialog cancelled.

@@ -3,10 +3,13 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+use crate::common::storage::{move_file, resolve_custom_data_dir, write_data_dir_anchor};
+
 // ---------------------------------------------------------------------------
 // Persistent settings stored as JSON in the app data folder. A small
 // bootstrap.json always stays in the default app data dir and points to the
 // (possibly user-chosen) data directory holding the actual settings.json.
+// The generic anchor/move helpers live in `crate::common::storage`.
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -38,34 +41,13 @@ impl Default for AppSettings {
     }
 }
 
-#[derive(Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct Bootstrap {
-    data_dir: Option<String>,
-}
-
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
-fn bootstrap_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    Ok(app_data_dir(app)?.join("bootstrap.json"))
-}
-
 pub fn resolve_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let default_dir = app_data_dir(app)?;
-    let bootstrap = bootstrap_path(app)?;
-    if let Ok(content) = fs::read_to_string(&bootstrap) {
-        if let Ok(cfg) = serde_json::from_str::<Bootstrap>(&content) {
-            if let Some(dir) = cfg.data_dir {
-                let path = PathBuf::from(dir);
-                if path.is_dir() {
-                    return Ok(path);
-                }
-            }
-        }
-    }
-    Ok(default_dir)
+    Ok(resolve_custom_data_dir(app, &default_dir))
 }
 
 fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -112,17 +94,6 @@ pub fn get_data_dir(app: tauri::AppHandle) -> Result<String, String> {
     resolve_data_dir(&app).map(|p| p.display().to_string())
 }
 
-fn move_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
-    match fs::rename(from, to) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            // Cross-volume move: copy first, then remove the source.
-            fs::copy(from, to)?;
-            fs::remove_file(from)
-        }
-    }
-}
-
 #[tauri::command]
 pub fn set_data_dir(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let trimmed = path.trim();
@@ -158,17 +129,9 @@ pub fn set_data_dir(app: tauri::AppHandle, path: String) -> Result<String, Strin
         }
     }
 
-    let bootstrap = bootstrap_path(&app)?;
-    if new_canon == default_canon {
-        // Back to the default location: drop the custom anchor.
-        let _ = fs::remove_file(&bootstrap);
-    } else {
-        let cfg = Bootstrap {
-            data_dir: Some(new_canon.display().to_string()),
-        };
-        let content = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-        fs::write(&bootstrap, content).map_err(|e| e.to_string())?;
-    }
+    // Point (or drop) the anchor kept in the default app data dir.
+    write_data_dir_anchor(&app, &default_canon, &new_canon)
+        .map_err(|e| format!("无法更新数据目录锚点：{e}"))?;
 
     Ok(new_canon.display().to_string())
 }

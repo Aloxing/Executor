@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { CheckSquare, Plus, Search, Trash2, X } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
+import JsonEditorModal from "../JsonEditorModal.vue"
 import CreateTemplateModal from "./CreateTemplateModal.vue"
 import DeleteConfirmDialog from "./DeleteConfirmDialog.vue"
 import TemplateCard from "./TemplateCard.vue"
@@ -12,6 +13,8 @@ import {
   importParameterTemplate,
   listTemplates,
   openInExplorer,
+  readParameterJson,
+  writeParameterJson,
   type TemplateInfo,
 } from "@/lib/templates"
 import { showToast } from "@/lib/toast"
@@ -29,6 +32,9 @@ const pendingDelete = ref<string[] | null>(null)
 const deleting = ref(false)
 // Right-click context menu state.
 const menu = ref<{ x: number; y: number; template: TemplateInfo } | null>(null)
+// Parameter JSON editor state.
+const paramEditing = ref<TemplateInfo | null>(null)
+const paramEditorContent = ref("")
 
 // Case-insensitive filter across name, type and description.
 const filtered = computed(() => {
@@ -158,6 +164,8 @@ async function importCode(template: TemplateInfo) {
 }
 
 // Parameter import: pick a single JSON file, renamed to <name>.json.
+// When the parameter template already exists, open the in-app JSON editor
+// instead of the file picker.
 async function importParameter(template: TemplateInfo) {
   try {
     const { open } = await import("@tauri-apps/plugin-dialog")
@@ -172,6 +180,27 @@ async function importParameter(template: TemplateInfo) {
     showToast("参数模板导入成功", "success")
   } catch (e) {
     showToast(typeof e === "string" ? e : "导入失败，请重试")
+  }
+}
+
+async function openParameterEditor(template: TemplateInfo) {
+  try {
+    const content = await readParameterJson(template.name)
+    paramEditing.value = template
+    paramEditorContent.value = content
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "读取参数模板失败")
+  }
+}
+
+async function saveParameterJson(content: string) {
+  if (!paramEditing.value) return
+  try {
+    await writeParameterJson(paramEditing.value.name, content)
+    showToast("参数模板保存成功", "success")
+    paramEditing.value = null
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "保存失败，请重试")
   }
 }
 
@@ -198,6 +227,11 @@ function importParameterFromMenu() {
   if (!menu.value) return
   const template = menu.value.template
   menu.value = null
+  if (template.parameterImported) {
+    // Already imported: open the JSON file in the in-app editor.
+    openParameterEditor(template)
+    return
+  }
   importParameter(template)
 }
 </script>
@@ -338,6 +372,13 @@ function importParameterFromMenu() {
       @open-dir="openInExplorerMenu"
       @import-code="importCodeFromMenu"
       @import-parameter="importParameterFromMenu"
+    />
+    <JsonEditorModal
+      v-if="paramEditing"
+      :title="`修改参数模板 · ${paramEditing.name}`"
+      :model-value="paramEditorContent"
+      @close="paramEditing = null"
+      @save="saveParameterJson"
     />
   </div>
 </template>

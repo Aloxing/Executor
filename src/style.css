@@ -138,6 +138,46 @@ body,
   line-height: 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* Theme-aware scrollbars                                              */
+/* ------------------------------------------------------------------ */
+:root {
+  --scrollbar-thumb: oklch(0.82 0.004 286);
+  --scrollbar-thumb-hover: oklch(0.7 0.008 286);
+}
+
+.dark {
+  --scrollbar-thumb: oklch(0.36 0.006 286);
+  --scrollbar-thumb-hover: oklch(0.46 0.008 286);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Apple-style modal entrance animation */
 @keyframes modal-enter {
   from {

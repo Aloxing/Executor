@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
-use crate::settings::read_settings;
+use crate::core::settings::read_settings;
 
 /// A template type entry shown on the templates page.
 #[derive(Serialize, Deserialize, Clone)]
@@ -214,6 +214,40 @@ pub fn delete_templates(app: tauri::AppHandle, names: Vec<String>) -> Result<(),
 #[tauri::command]
 pub fn get_template_dir(app: tauri::AppHandle, name: String) -> Result<String, String> {
     template_dir(&app, name.trim()).map(|p| p.display().to_string())
+}
+
+fn parameter_json_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+    Ok(template_dir(app, name)?.join("parameter").join(format!("{name}.json")))
+}
+
+/// Reads the template's parameter JSON file for in-app editing.
+#[tauri::command]
+pub fn read_parameter_json(app: tauri::AppHandle, name: String) -> Result<String, String> {
+    let name = name.trim().to_string();
+    let file = parameter_json_path(&app, &name)?;
+    if !file.is_file() {
+        return Err("尚未导入参数模板，请先导入".to_string());
+    }
+    fs::read_to_string(&file).map_err(|e| format!("读取参数模板失败：{e}"))
+}
+
+/// Saves edited parameter JSON content. The content is validated as JSON
+/// before being written back to `<name>.json` verbatim.
+#[tauri::command]
+pub fn write_parameter_json(
+    app: tauri::AppHandle,
+    name: String,
+    content: String,
+) -> Result<(), String> {
+    let name = name.trim().to_string();
+    // Validate without reformatting the user's content.
+    serde_json::from_str::<serde_json::Value>(&content)
+        .map_err(|e| format!("JSON 格式错误：{e}"))?;
+    let file = parameter_json_path(&app, &name)?;
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("无法创建文件夹：{e}"))?;
+    }
+    fs::write(&file, content).map_err(|e| format!("保存参数模板失败：{e}"))
 }
 
 /// Opens a path in the platform file manager. Spawns the OS file manager

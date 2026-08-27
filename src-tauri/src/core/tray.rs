@@ -2,7 +2,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
-use crate::webview::{set_webview_memory_level, MemoryUsageLevel};
+use crate::core::webview::{set_webview_memory_level, MemoryUsageLevel};
 
 pub fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let show_item = MenuItemBuilder::with_id("show", "显示主界面").build(app)?;
