@@ -1,6 +1,7 @@
 mod android_projects;
 mod common;
 pub mod core;
+mod configs;
 mod imports;
 mod templates;
 mod workspace;
@@ -16,8 +17,15 @@ use core::window::{
 };
 use android_projects::{
     add_android_project, delete_android_project, delete_android_projects,
-    detach_android_project, get_android_project_dir, import_android_projects,
-    list_android_projects, reload_android_project, update_android_project,
+    detach_android_project, get_android_project_dir, import_android_project,
+    import_android_projects, list_android_projects, reload_android_project,
+    update_android_project,
+};
+use configs::{
+    add_config_project, create_config_queue, delete_config_projects, delete_config_queues,
+    list_config_queues, record_all_config_projects, record_config_project,
+    reload_config_project, remove_config_project, save_config_template, start_config_project,
+    update_config_project,
 };
 use imports::{create_import_queue, delete_queues, list_import_queues};
 use templates::{
@@ -65,6 +73,19 @@ pub fn run() {
             delete_android_projects,
             detach_android_project,
             import_android_projects,
+            import_android_project,
+            list_config_queues,
+            create_config_queue,
+            add_config_project,
+            remove_config_project,
+            save_config_template,
+            start_config_project,
+            delete_config_queues,
+            delete_config_projects,
+            update_config_project,
+            reload_config_project,
+            record_config_project,
+            record_all_config_projects,
             ensure_workspace_areas
         ])
         .setup(move |app| {

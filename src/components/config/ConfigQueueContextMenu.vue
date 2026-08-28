@@ -1,25 +1,26 @@
 <script setup lang="ts">
-import { AppWindow, FolderDown, Trash2 } from "lucide-vue-next"
+import { FolderDown, FolderOpen, PackageOpen, Trash2 } from "lucide-vue-next"
 import { computed, onMounted, onUnmounted } from "vue"
-import type { ImportQueue } from "@/lib/queues"
+import type { ConfigQueue } from "@/lib/config"
 
 const props = defineProps<{
   x: number
   y: number
-  queue: ImportQueue
+  queue: ConfigQueue
 }>()
 
 const emit = defineEmits<{
   close: []
-  "add-android": []
+  "pick-imported": []
+  "pick-disk": []
   "record-all": []
   "delete-queue": []
 }>()
 
-// Keep the menu inside the viewport (approximate menu size 180x130).
+// Keep the menu inside the viewport (approximate menu size 200x160).
 const position = computed(() => ({
-  left: `${Math.max(4, Math.min(props.x, window.innerWidth - 190))}px`,
-  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 140))}px`,
+  left: `${Math.max(4, Math.min(props.x, window.innerWidth - 210))}px`,
+  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 170))}px`,
 }))
 
 function onKeydown(event: KeyboardEvent) {
@@ -43,7 +44,7 @@ onUnmounted(() => {
   >
     <div
       role="menu"
-      class="bg-popover text-popover-foreground absolute min-w-[180px] rounded-lg border border-border p-1 shadow-md"
+      class="bg-popover text-popover-foreground absolute min-w-[200px] rounded-lg border border-border p-1 shadow-md"
       :style="position"
       @click.stop
     >
@@ -51,16 +52,25 @@ onUnmounted(() => {
         type="button"
         role="menuitem"
         class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
-        @click="emit('add-android')"
+        @click="emit('pick-imported')"
       >
-        <AppWindow class="size-3.5 shrink-0" />
-        添加 Android 项目
+        <PackageOpen class="size-3.5 shrink-0" />
+        从已导入的项目配置
       </button>
       <button
         type="button"
         role="menuitem"
         class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
-        title="按包名将该队列下全部项目复制到导入目录"
+        @click="emit('pick-disk')"
+      >
+        <FolderOpen class="size-3.5 shrink-0" />
+        从磁盘中项目选择配置
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="导入区的项目从导入区目录复制，磁盘的项目从磁盘目录复制"
         @click="emit('record-all')"
       >
         <FolderDown class="size-3.5 shrink-0" />

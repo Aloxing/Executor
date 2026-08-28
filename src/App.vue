@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue"
 import AppTitleBar from "./components/AppTitleBar.vue"
+import ConfigView from "./components/config/ConfigView.vue"
 import FloatingNavBar, { type NavKey } from "./components/FloatingNavBar.vue"
 import ImportView from "./components/import/ImportView.vue"
 import SettingsModal from "./components/SettingsModal.vue"
@@ -62,6 +63,7 @@ onMounted(async () => {
     <main class="min-h-0 flex-1 overflow-auto p-[17px]">
       <TemplatesView v-if="activeView === 'templates'" />
       <ImportView v-else-if="activeView === 'import'" />
+      <ConfigView v-else-if="activeView === 'config'" />
       <section v-else class="flex h-full flex-col gap-3">
         <!-- Page title on its own row, aligned left -->
         <h1 class="shrink-0 text-[clamp(14px,1.6vw,16px)] font-semibold">

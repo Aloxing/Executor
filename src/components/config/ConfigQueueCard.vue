@@ -1,32 +1,29 @@
 <script setup lang="ts">
-import { ChevronRight, Loader2 } from "lucide-vue-next"
+import { ChevronRight, Cog, Loader2 } from "lucide-vue-next"
 import { ref } from "vue"
-import AndroidSubCard from "./AndroidSubCard.vue"
-import type { AndroidProject } from "@/lib/android"
-import type { ImportQueue } from "@/lib/queues"
+import ConfigSubCard from "./ConfigSubCard.vue"
+import type { ConfigProject, ConfigQueue } from "@/lib/config"
 
 const props = defineProps<{
-  queue: ImportQueue
-  /** Android projects attached to this queue. */
-  projects: AndroidProject[]
-  /** True while the queue's record-all action is running. */
-  importing?: boolean
+  queue: ConfigQueue
+  /** True while the queue is receiving projects (copy in progress). */
+  adding?: boolean
   /** Batch selection mode: card becomes a toggle, actions are hidden. */
   selectMode?: boolean
   selected?: boolean
 }>()
 
 const emit = defineEmits<{
-  "delete-project": [project: AndroidProject]
-  "toggle-select": []
+  "delete-project": [project: ConfigProject]
   contextmenu: [event: MouseEvent]
   // Sub cards carry their own context menu; forwarded without bubbling
   // into the queue card's menu.
-  "project-contextmenu": [project: AndroidProject, event: MouseEvent]
+  "project-contextmenu": [project: ConfigProject, event: MouseEvent]
+  "toggle-select": []
 }>()
 
-// Click the card to expand/collapse the Android project sub cards, or to
-// toggle the batch selection when in select mode.
+// Click the card to expand/collapse the sub project cards, or to toggle
+// the batch selection when in select mode.
 const expanded = ref(false)
 
 function onClick() {
@@ -71,17 +68,12 @@ function onClick() {
           <path d="M20 6 9 17l-5-5" />
         </svg>
       </span>
-      <!-- Lucide dropped brand icons, so the Android robot is inlined. -->
       <span
-        class="bg-[#3DDC84]/15 text-[#3DDC84] inline-flex size-6 shrink-0 items-center justify-center rounded-md"
+        class="bg-sky-500/15 text-sky-600 dark:text-sky-500 inline-flex size-6 shrink-0 items-center justify-center rounded-md"
         aria-hidden="true"
-        title="Android"
+        title="配置队列"
       >
-        <svg viewBox="0 0 24 24" fill="currentColor" class="size-3.5">
-          <path
-            d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4483-.9993.9993-.9993c.5511 0 .9993.4483.9993.9993.0001.5511-.4482.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4483.9993.9993 0 .5511-.4483.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 0 0-.1521-.5676.416.416 0 0 0-.5676.1521l-2.0223 3.503C15.5902 8.2439 13.8533 7.8508 12 7.8508s-3.5902.3931-5.1368 1.0989L4.8409 5.4467a.4161.4161 0 0 0-.5677-.1521.4157.4157 0 0 0-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3435-4.1021-2.6892-7.5743-6.1185-9.4396"
-          />
-        </svg>
+        <Cog class="size-3.5" />
       </span>
       <p
         class="min-w-0 flex-1 truncate text-[clamp(12px,1.3vw,13px)] font-semibold"
@@ -92,22 +84,20 @@ function onClick() {
       <span
         class="text-muted-foreground shrink-0 text-[clamp(9px,1vw,10px)]"
       >
-        {{ projects.length }} 个项目
+        {{ queue.projects.length }} 个项目
       </span>
-      <!-- Actions (hidden in batch selection mode) -->
-      <template v-if="!selectMode">
-        <!-- Loading indicator while the record-all action is running -->
-        <Loader2
-          v-if="importing"
-          class="text-muted-foreground size-3.5 shrink-0 animate-spin"
-          aria-label="记录中"
-          title="项目记录中…"
-        />
-        <ChevronRight
-          class="text-muted-foreground size-3.5 shrink-0 transition-transform duration-200"
-          :class="expanded ? 'rotate-90' : ''"
-        />
-      </template>
+      <!-- Loading indicator while projects are being copied in -->
+      <Loader2
+        v-if="adding"
+        class="text-muted-foreground size-3.5 shrink-0 animate-spin"
+        aria-label="添加中"
+        title="项目添加中…"
+      />
+      <ChevronRight
+        v-if="!selectMode"
+        class="text-muted-foreground size-3.5 shrink-0 transition-transform duration-200"
+        :class="expanded ? 'rotate-90' : ''"
+      />
     </div>
     <!-- Creation time -->
     <p
@@ -116,20 +106,20 @@ function onClick() {
     >
       创建：{{ queue.createdAt }}
     </p>
-    <!-- Android project sub cards -->
+    <!-- Sub project cards -->
     <div v-if="expanded && !selectMode" class="flex flex-col gap-1.5 pt-1">
-      <AndroidSubCard
-        v-for="project in projects"
-        :key="project.packageName"
+      <ConfigSubCard
+        v-for="project in queue.projects"
+        :key="project.uuid"
         :project="project"
         @delete="emit('delete-project', project)"
         @contextmenu="emit('project-contextmenu', project, $event)"
       />
       <p
-        v-if="!projects.length"
+        v-if="!queue.projects.length"
         class="text-muted-foreground px-1 py-1 text-center text-[clamp(9px,1vw,10px)]"
       >
-        暂无 Android 项目，右键卡片添加
+        暂无项目，右键卡片添加
       </p>
     </div>
   </div>

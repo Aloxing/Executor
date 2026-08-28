@@ -455,6 +455,41 @@ fn run_import(app: &tauri::AppHandle, queue_uuid: &str) -> Result<Vec<AndroidPro
         .collect())
 }
 
+/// Copies the recorded root directory of a single Android project into
+/// `<workspace>/import/package/<package_name>/` and marks it as imported.
+/// Same behavior as the queue-wide import, scoped to one project. Runs on
+/// the async thread pool so the UI stays responsive for large projects.
+#[tauri::command]
+pub async fn import_android_project(
+    app: tauri::AppHandle,
+    package_name: String,
+) -> Result<AndroidProject, String> {
+    tauri::async_runtime::spawn_blocking(move || run_import_one(&app, &package_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn run_import_one(app: &tauri::AppHandle, package_name: &str) -> Result<AndroidProject, String> {
+    let package_name = package_name.trim().to_string();
+    let mut projects = load_projects(app)?;
+    let index = projects
+        .iter()
+        .position(|p| p.package_name == package_name)
+        .ok_or_else(|| format!("未找到包名为「{package_name}」的项目"))?;
+    let source = PathBuf::from(projects[index].root_path.trim());
+    if !source.is_dir() {
+        return Err(format!("项目「{package_name}」的下载路径不存在，无法导入"));
+    }
+    let target = package_dir(app)?.join(&package_name);
+    clear_dir(&target)
+        .and_then(|()| fs::create_dir_all(&target))
+        .and_then(|()| copy_dir_all(&source, &target))
+        .map_err(|e| format!("导入项目「{package_name}」失败：{e}"))?;
+    projects[index].import_status = "imported".to_string();
+    save_projects(app, &projects)?;
+    Ok(projects[index].clone())
+}
+
 /// Removes every entry inside `dir` without deleting `dir` itself.
 fn clear_dir(dir: &Path) -> std::io::Result<()> {
     if !dir.is_dir() {

@@ -7,12 +7,14 @@ import ConfirmDialog from "./ConfirmDialog.vue"
 import CreateQueueModal from "./CreateQueueModal.vue"
 import DeleteProjectDialog from "./DeleteProjectDialog.vue"
 import ImportProjectCard from "./ImportProjectCard.vue"
+import ImportProjectContextMenu from "./ImportProjectContextMenu.vue"
 import QueueCard from "./QueueCard.vue"
 import QueueContextMenu from "./QueueContextMenu.vue"
 import {
   deleteAndroidProject,
   deleteAndroidProjects,
   detachAndroidProject,
+  importAndroidProject,
   importAndroidProjects,
   listAndroidProjects,
   type AndroidProject,
@@ -37,8 +39,10 @@ const pendingDelete = ref<AndroidProject | null>(null)
 // Project waiting for detach confirmation (queue sub card, keeps data).
 const pendingDetach = ref<AndroidProject | null>(null)
 const deleting = ref(false)
-// Queue uuid currently running its import action.
+// Queue uuid currently running its record-all action.
 const importingUuid = ref("")
+// Right-click context menu state of a sub project card.
+const subMenu = ref<{ x: number; y: number; project: AndroidProject } | null>(null)
 
 // Batch selection mode: “queues” or “projects”, empty when inactive.
 const selectTarget = ref<"" | "queues" | "projects">("")
@@ -238,6 +242,18 @@ function openDeleteQueue() {
   onDeleteQueue(queue)
 }
 
+// 记录全部项目: the queue context menu entry replacing the old card button.
+function openRecordAll() {
+  if (!menu.value) return
+  const queue = menu.value.queue
+  menu.value = null
+  onImport(queue)
+}
+
+function onProjectContextMenu(project: AndroidProject, event: MouseEvent) {
+  subMenu.value = { x: event.clientX, y: event.clientY, project }
+}
+
 async function onProjectSaved(project: AndroidProject) {
   await reload()
   showToast(`Android 项目「${project.appName}」保存成功`, "success")
@@ -296,8 +312,9 @@ async function confirmDelete() {
   }
 }
 
-// Only this action copies the recorded root directories into the
-// `package/<package name>` folders; adding a project merely records it.
+// 记录全部项目: the only action that copies the recorded root directories
+// into the `package/<package name>` folders; adding a project merely
+// records it.
 async function onImport(queue: ImportQueue) {
   if (importingUuid.value) return
   importingUuid.value = queue.uuid
@@ -309,9 +326,27 @@ async function onImport(queue: ImportQueue) {
   )
   try {
     await importAndroidProjects(queue.uuid)
-    showToast(`队列「${queue.name}」导入完成`, "success")
+    showToast(`队列「${queue.name}」记录完成`, "success")
   } catch (e) {
-    showToast(typeof e === "string" ? e : "导入失败，请重试")
+    showToast(typeof e === "string" ? e : "记录失败，请重试")
+  } finally {
+    importingUuid.value = ""
+    await reload()
+  }
+}
+
+// 记录项目: same copy behavior as the queue-wide record-all, scoped to one
+// project.
+async function onRecordProject() {
+  const target = subMenu.value
+  if (!target || importingUuid.value) return
+  subMenu.value = null
+  importingUuid.value = target.project.queueUuid
+  try {
+    await importAndroidProject(target.project.packageName)
+    showToast(`项目「${target.project.appName}」记录完成`, "success")
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "记录失败，请重试")
   } finally {
     importingUuid.value = ""
     await reload()
@@ -471,10 +506,10 @@ async function onImport(queue: ImportQueue) {
               :importing="importingUuid === queue.uuid"
               :select-mode="selectTarget === 'queues'"
               :selected="selectedQueues.has(queue.uuid)"
-              @import="onImport(queue)"
               @toggle-select="toggleQueue(queue.uuid)"
               @delete-project="onDetachProject"
               @contextmenu="onContextMenu(queue, $event)"
+              @project-contextmenu="onProjectContextMenu"
             />
           </template>
           <div v-else class="flex flex-1 items-center justify-center">
@@ -541,7 +576,16 @@ async function onImport(queue: ImportQueue) {
       :queue="menu.queue"
       @close="menu = null"
       @add-android="openAddProject"
+      @record-all="openRecordAll"
       @delete-queue="openDeleteQueue"
+    />
+    <ImportProjectContextMenu
+      v-if="subMenu"
+      :x="subMenu.x"
+      :y="subMenu.y"
+      :project="subMenu.project"
+      @close="subMenu = null"
+      @record="onRecordProject"
     />
     <AndroidProjectModal
       v-if="projectModal"

@@ -106,3 +106,11 @@ export async function importAndroidProjects(
 ): Promise<AndroidProject[]> {
   return invoke<AndroidProject[]>("import_android_projects", { queueUuid })
 }
+
+/** Copies a single project into its package folder and marks it as
+ * imported; same behavior as the queue-wide import. */
+export async function importAndroidProject(
+  packageName: string
+): Promise<AndroidProject> {
+  return invoke<AndroidProject>("import_android_project", { packageName })
+}
