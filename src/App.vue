@@ -24,6 +24,21 @@ const viewLabels: Record<NavKey, string> = {
 }
 const activeViewLabel = computed(() => viewLabels[activeView.value])
 
+// Implemented views are kept alive across switches so page state
+// (filters, inputs, expanded cards…) survives navigation.
+const viewComponent = computed(() => {
+  switch (activeView.value) {
+    case "templates":
+      return TemplatesView
+    case "import":
+      return ImportView
+    case "config":
+      return ConfigView
+    default:
+      return null
+  }
+})
+
 onMounted(async () => {
   await nextTick()
   // Load persisted settings (close behavior etc.) before the window shows.
@@ -61,10 +76,14 @@ onMounted(async () => {
       />
     </AppTitleBar>
     <main class="min-h-0 flex-1 overflow-auto p-[17px]">
-      <TemplatesView v-if="activeView === 'templates'" />
-      <ImportView v-else-if="activeView === 'import'" />
-      <ConfigView v-else-if="activeView === 'config'" />
-      <section v-else class="flex h-full flex-col gap-3">
+      <KeepAlive>
+        <component
+          :is="viewComponent"
+          v-if="viewComponent"
+          :key="activeView"
+        />
+      </KeepAlive>
+      <section v-if="!viewComponent" class="flex h-full flex-col gap-3">
         <!-- Page title on its own row, aligned left -->
         <h1 class="shrink-0 text-[clamp(14px,1.6vw,16px)] font-semibold">
           {{ activeViewLabel }}

@@ -27,6 +27,9 @@ export interface ConfigProject {
   started: boolean
   /** Whether the contents were copied into the config area (recorded). */
   recorded: boolean
+  /** Whether the template's code folder was already copied into the
+   * project directory; the next launch skips the copy step. */
+  codeCopied: boolean
 }
 
 export interface ConfigQueue {
@@ -86,6 +89,7 @@ export async function addConfigProject(
     | "configTime"
     | "sourcePath"
     | "recorded"
+    | "codeCopied"
   >
 ): Promise<ConfigQueue> {
   return invoke<ConfigQueue>("add_config_project", {
@@ -201,4 +205,39 @@ export async function recordAllConfigProjects(
   queueUuid: string
 ): Promise<ConfigQueue> {
   return invoke<ConfigQueue>("record_all_config_projects", { queueUuid })
+}
+
+/** Reads the project's parameter JSON (config/parameter/<package
+ * name>.json) for in-card editing. */
+export async function readProjectParameter(
+  projectUuid: string
+): Promise<string> {
+  return invoke<string>("read_project_parameter", { projectUuid })
+}
+
+/** Re-copies the selected template's parameter JSON from the templates
+ * page and returns the fresh content (overwrites the current file). */
+export async function refreshProjectParameter(
+  projectUuid: string
+): Promise<string> {
+  return invoke<string>("refresh_project_parameter", { projectUuid })
+}
+
+/** Launches a recorded project: copies the template's code folder into
+ * the project's config directory (overwriting same-name files), then runs
+ * the argument kernel followed by the code kernel with the package-named
+ * parameter JSON. Resolves with a human-readable summary. */
+export async function executeConfigProject(
+  projectUuid: string
+): Promise<string> {
+  return invoke<string>("execute_config_project", { projectUuid })
+}
+
+/** Saves edited parameter JSON content (validated server-side); entries
+ * of other write modes are kept untouched for the code kernel. */
+export async function writeProjectParameter(
+  projectUuid: string,
+  content: string
+): Promise<void> {
+  return invoke("write_project_parameter", { projectUuid, content })
 }

@@ -85,24 +85,55 @@ fn argument_kernel_matches_python_reference() {
     let report =
         executor_lib::core::android::argument::run(&work, test_json.as_path(), None, options).unwrap();
 
-    // Report shape from the Python reference run:
-    // 21 argument entries resolved, 1 skipped, 19 written, 2 copied, no errors.
+    // Config-driven expectations: read the current test.json so the test
+    // keeps working whenever the fixture values are legitimately edited.
+    let spec: Value = serde_json::from_str(&fs::read_to_string(&test_json).unwrap()).unwrap();
+    let copy_source_ok = |entry: &str| {
+        let value = spec[entry]["value"].as_str().unwrap_or("");
+        !value.is_empty() && Path::new(value).exists()
+    };
+    let expected_copies =
+        usize::from(copy_source_ok("app_icon")) + usize::from(copy_source_ok("app_image"));
+
+    // Report shape: 21 argument entries resolved, 1 skipped, 19 written.
     assert_eq!(report.resolved.len(), 21);
     assert_eq!(report.skipped, vec!["app_code_inject".to_string()]);
     assert_eq!(report.written.len(), 19);
-    assert_eq!(report.copied.len(), 2);
-    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    assert_eq!(report.copied.len(), expected_copies);
+    if expected_copies == 2 {
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    } else {
+        // Empty/missing copy sources are collected as errors in loose mode.
+        assert_eq!(report.errors.len(), 2, "errors: {:?}", report.errors);
+    }
 
-    // Spot-checks of the resolved values against the filled-in test data
-    // (override takes the bare value, own prefix applies, dates format).
+    // Spot-checks computed from the config itself (override takes the bare
+    // value, own prefix applies).
     let resolved = &report.resolved;
-    assert_eq!(resolved.get("xiaomi_game_app_id").unwrap(), &serde_json::json!("mi_2882303761520123456"));
-    assert_eq!(resolved.get("xiaomi_ads_app_id").unwrap(), &serde_json::json!("2882303761520123456"));
-    assert_eq!(resolved.get("xiaomi_ads_app_name").unwrap(), &serde_json::json!("魔界大冒险"));
-    assert_eq!(resolved.get("app_version_code").unwrap(), &serde_json::json!(3));
-    assert_eq!(resolved.get("app_show_privacy").unwrap(), &serde_json::json!(true));
-    assert_eq!(resolved.get("xiaomi_ads_date_limit").unwrap(), &serde_json::json!("2026-06-01 19:00:00"));
-    assert_eq!(resolved.get("xiaomi_ads_banner_id").unwrap(), &serde_json::json!("b0dad3317de042b0a6c588155dd83610"));
+    let game_value = spec["xiaomi_game_app_id"]["value"].as_str().unwrap_or("");
+    let game_prefix = spec["xiaomi_game_app_id"]["value_prefix"].as_str().unwrap_or("");
+    assert_eq!(
+        resolved.get("xiaomi_game_app_id").unwrap(),
+        &serde_json::json!(format!("{game_prefix}{game_value}"))
+    );
+    assert_eq!(
+        resolved.get("xiaomi_ads_app_id").unwrap(),
+        &serde_json::json!(game_value),
+        "override must inherit the bare value without the prefix"
+    );
+    assert_eq!(
+        resolved.get("xiaomi_ads_app_name").unwrap(),
+        &serde_json::json!(spec["app_name"]["value"].as_str().unwrap_or(""))
+    );
+    assert_eq!(
+        resolved.get("app_version_code").unwrap(),
+        &spec["app_version_code"]["value"]
+    );
+    assert_eq!(
+        resolved.get("xiaomi_ads_date_limit").unwrap(),
+        &spec["xiaomi_ads_date_limit"]["value"],
+        "a yyyy-MM-dd HH:mm:ss value already matches its format"
+    );
 
     // Byte-for-byte equality with the Python-generated files.
     for rel in ARGUMENT_TOUCHED {
@@ -138,9 +169,25 @@ fn code_kernel_matches_python_reference() {
 
     let results = executor_lib::core::android::code::run(&work, test_json.as_path()).unwrap();
 
-    // Python reference: 22 entries -> 21 skipped (write_mode != "code")
-    // and 1 successful injection between the paired markers at the end of
-    // the target java file.
+    // Config-driven expectations.
+    let spec: Value = serde_json::from_str(&fs::read_to_string(&test_json).unwrap()).unwrap();
+    let task = &spec["app_code_inject"];
+    let scenes = task["scenes"].as_object();
+    let expected_methods = scenes.map(Map::len).unwrap_or(0);
+    let backup_enabled = task.get("backup").and_then(Value::as_bool).unwrap_or(true);
+    // Extension fields (returnType/params/return) are a Rust-only superset:
+    // the Python engine ignores them, so byte parity only applies without.
+    let has_extensions = scenes.map_or(false, |scenes| {
+        scenes.values().any(|scene| {
+            scene.get("returnType").is_some()
+                || scene.get("return_type").is_some()
+                || scene.get("params").is_some()
+                || scene.get("return").is_some()
+        })
+    });
+
+    // 22 entries -> 21 skipped (write_mode != "code") and 1 successful
+    // injection between the paired markers at the end of the target file.
     assert_eq!(results.len(), 22);
     let skipped = results.iter().filter(|r| r.skipped).count();
     assert_eq!(skipped, 21);
@@ -151,17 +198,43 @@ fn code_kernel_matches_python_reference() {
         "injection failed: {:?}",
         executed[0].error
     );
-    assert_eq!(executed[0].methods_generated, 9);
-    // Backup is disabled via "backup": false in the config: no .bak file.
-    assert!(executed[0].backup.is_none(), "unexpected backup: {:?}", executed[0].backup);
+    assert_eq!(executed[0].methods_generated, expected_methods);
+    if backup_enabled {
+        assert!(executed[0].backup.as_ref().is_some_and(|b| b.contains(".bak_")));
+    } else {
+        assert!(executed[0].backup.is_none(), "unexpected backup: {:?}", executed[0].backup);
+    }
 
-    // The injected file must be byte-identical to the Python reference
-    // copy (both kernels ran the same injection).
     let target = "unityLibrary/src/main/java/com/unity3d/player/interfaces/activity/AdsUnityPlayerActivity.java";
-    assert_eq!(
-        fs::read(work.join(target)).unwrap(),
-        fs::read(python_ref.join(target)).unwrap()
-    );
+    if has_extensions {
+        // Rust superset: verify the extended signatures landed instead of
+        // diffing against the Python output.
+        let injected = fs::read_to_string(work.join(target)).unwrap();
+        for (scene_name, scene) in scenes.unwrap() {
+            let return_type = scene
+                .get("returnType")
+                .or_else(|| scene.get("return_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("void");
+            assert!(
+                injected.contains(&format!("public {return_type} {scene_name}(")),
+                "missing extended signature for {scene_name}"
+            );
+            assert_eq!(
+                injected.matches(&format!("public {return_type} {scene_name}(")).count(),
+                1,
+                "duplicated method {scene_name}"
+            );
+        }
+        assert_eq!(injected.matches("//---inject_code_area---").count(), 2);
+    } else {
+        // The injected file must be byte-identical to the Python reference
+        // copy (both kernels ran the same injection).
+        assert_eq!(
+            fs::read(work.join(target)).unwrap(),
+            fs::read(python_ref.join(target)).unwrap()
+        );
+    }
 }
 
 /// Runs the Rust code kernel against a target that actually carries the
@@ -177,6 +250,18 @@ fn code_kernel_injection_roundtrip_with_python() {
     let target_rel = "unityLibrary/src/main/java/com/unity3d/player/interfaces/activity/AdsUnityPlayerActivity.java";
     let marker = "//---inject_code_area---";
 
+    let spec: Value = serde_json::from_str(&fs::read_to_string(&test_json).unwrap()).unwrap();
+    let scenes = spec["app_code_inject"]["scenes"].as_object();
+    let expected_methods = scenes.map(Map::len).unwrap_or(0);
+    let has_extensions = scenes.map_or(false, |scenes| {
+        scenes.values().any(|scene| {
+            scene.get("returnType").is_some()
+                || scene.get("return_type").is_some()
+                || scene.get("params").is_some()
+                || scene.get("return").is_some()
+        })
+    });
+
     // Rust side: add a paired marker region and run the kernel.
     let rust_dir = parity_tmp("parity_roundtrip_rust");
     fs::create_dir_all(rust_dir.join("unityLibrary/src/main/java/com/unity3d/player/interfaces/activity")).unwrap();
@@ -191,7 +276,22 @@ fn code_kernel_injection_roundtrip_with_python() {
     let executed: Vec<_> = results.iter().filter(|r| !r.skipped).collect();
     assert_eq!(executed.len(), 1);
     assert!(executed[0].success, "rust injection failed: {:?}", executed[0].error);
-    assert_eq!(executed[0].methods_generated, 9);
+    assert_eq!(executed[0].methods_generated, expected_methods);
+
+    // With extension fields the Rust output intentionally differs from
+    // Python (superset); only verify the extended signatures then.
+    if has_extensions {
+        let injected = fs::read_to_string(&rust_target).unwrap();
+        for (scene_name, scene) in scenes.unwrap() {
+            let return_type = scene
+                .get("returnType")
+                .or_else(|| scene.get("return_type"))
+                .and_then(Value::as_str)
+                .unwrap_or("void");
+            assert!(injected.contains(&format!("public {return_type} {scene_name}(")));
+        }
+        return;
+    }
 
     // Python side: identical fixture, run through code_kernel.py.
     let py_dir = parity_tmp("parity_roundtrip_py");

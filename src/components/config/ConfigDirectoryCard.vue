@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Cog, Pencil, Trash2 } from "lucide-vue-next"
-import { computed } from "vue"
+import { ChevronRight, Cog, Loader2, Pencil, Rocket, Trash2 } from "lucide-vue-next"
+import { computed, ref } from "vue"
+import ParameterCard from "./ParameterCard.vue"
 import type { ConfigProject } from "@/lib/config"
 
 const props = defineProps<{
@@ -9,17 +10,32 @@ const props = defineProps<{
   /** Batch selection mode: card becomes a toggle, actions are hidden. */
   selectMode?: boolean
   selected?: boolean
+  /** True while the launch (kernel injection) action is running. */
+  executing?: boolean
 }>()
 
 const emit = defineEmits<{
   edit: []
+  execute: []
   delete: []
   "toggle-select": []
 }>()
 
 function onClick() {
-  if (props.selectMode) emit("toggle-select")
+  if (props.selectMode) {
+    emit("toggle-select")
+    return
+  }
+  // Click the card to expand/collapse the parameter card section.
+  expanded.value = !expanded.value
+  // First expand mounts the ParameterCard; later collapses only hide it.
+  if (expanded.value) paramLoaded.value = true
 }
+
+const expanded = ref(false)
+// Once expanded for the first time the ParameterCard stays mounted (only
+// hidden on collapse), so unsaved edits survive collapsing the card.
+const paramLoaded = ref(false)
 
 // Imported / non-imported source tag, mirroring the import area's status
 // tag style.
@@ -38,9 +54,8 @@ const sourceMeta = computed(() =>
 
 <template>
   <div
-    class="flex w-full flex-col gap-1.5 rounded-xl border px-3 py-2.5 transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
+    class="flex w-full cursor-pointer select-none flex-col gap-1.5 rounded-xl border px-3 py-2.5 transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
     :class="[
-      selectMode && 'cursor-pointer',
       selected
         ? 'border-primary/40 bg-primary/[0.06]'
         : 'border-transparent bg-muted/40 hover:border-border hover:bg-muted/60 hover:shadow-md hover:shadow-black/[0.06] dark:hover:shadow-black/[0.2]',
@@ -101,6 +116,17 @@ const sourceMeta = computed(() =>
       <template v-if="!selectMode">
         <button
           type="button"
+          class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="executing"
+          aria-label="启动"
+          title="启动：完善配置并执行内核注入"
+          @click.stop="emit('execute')"
+        >
+          <Loader2 v-if="executing" class="size-3 animate-spin" />
+          <Rocket v-else class="size-3" />
+        </button>
+        <button
+          type="button"
           class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
           aria-label="查看项目信息"
           title="查看项目信息"
@@ -118,6 +144,10 @@ const sourceMeta = computed(() =>
         >
           <Trash2 class="size-3" />
         </button>
+        <ChevronRight
+          class="text-muted-foreground size-3.5 shrink-0 transition-transform duration-200"
+          :class="expanded ? 'rotate-90' : ''"
+        />
       </template>
     </div>
     <!-- Package name -->
@@ -141,5 +171,16 @@ const sourceMeta = computed(() =>
     >
       配置时间：{{ project.startedAt }}
     </p>
+    <!-- Parameter card section: mounted on first expand, then only
+         hidden, so unsaved edits survive collapsing -->
+    <div v-if="paramLoaded" v-show="expanded && !selectMode" class="flex flex-col gap-1.5 pt-1">
+      <div
+        class="bg-background/60 flex w-full flex-col gap-1.5 rounded-lg border border-border/60 px-2.5 py-2"
+        @click.stop
+      >
+        <p class="text-[clamp(11px,1.2vw,12px)] font-semibold">参数卡片</p>
+        <ParameterCard :project="project" />
+      </div>
+    </div>
   </div>
 </template>

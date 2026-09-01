@@ -29,6 +29,8 @@ struct Argument {
     value_override: String,
     value_prefix: String,
     value_format: String,
+    /// When non-empty, the resolved value must be one of these choices.
+    value_choice: Vec<String>,
     value: Value,
     kind: Kind,
 }
@@ -63,6 +65,19 @@ impl Argument {
             value_override: str_field(body, "value_override"),
             value_prefix: str_field(body, "value_prefix"),
             value_format: str_field(body, "value_format"),
+            value_choice: body
+                .get("value_choice")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|item| match item {
+                            Value::String(s) => s.clone(),
+                            other => display(other),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             kind: kind_of(&raw),
             value: raw,
         }
@@ -170,6 +185,16 @@ impl ArgumentTable {
         if arg.kind == Kind::String {
             let formatted = apply_format(bare.as_str().unwrap_or(""), &arg.value_format);
             bare = Value::String(formatted);
+        }
+        // value_choice constrains the resolved value to the listed options.
+        if !arg.value_choice.is_empty() {
+            let rendered = display(&bare);
+            if !arg.value_choice.iter().any(|choice| *choice == rendered) {
+                return Err(format!(
+                    "{name} 的 value「{rendered}」不在 value_choice 可选值 [{}] 中",
+                    arg.value_choice.join(", ")
+                ));
+            }
         }
         self.cache_raw.insert(name.to_string(), bare.clone());
 
@@ -539,6 +564,11 @@ mod tests {
             "public class Cfg {\n    public static final String Name = \"\";\n    public static final boolean Show = false;\n}\n")
             .unwrap();
         fs::write(dir.join("assets/source.png"), b"png-bytes").unwrap();
+        fs::write(
+            dir.join("local.properties"),
+            "# local config\nndk.dir=C\\:\\ndk\\old\nsdk.dir=C\\:\\sdk\\old\n",
+        )
+        .unwrap();
 
         let spec_path = dir.join("config.json");
         fs::write(
@@ -573,6 +603,13 @@ mod tests {
                     "key_name": "image",
                     "value": "assets/source.png"
                 },
+                "sdk_dir": {
+                    "write_mode": "argument",
+                    "file_path": "local.properties",
+                    "file_type": "properties",
+                    "key_name": "sdk.dir",
+                    "value": "C\\:\\New\\Sdk"
+                },
                 "some_code": { "write_mode": "code", "file_path": "x.java" }
             })
             .to_string(),
@@ -582,7 +619,7 @@ mod tests {
         let report = run(&dir, &spec_path, None, KernelOptions::default()).unwrap();
         assert_eq!(report.skipped, vec!["some_code".to_string()]);
         assert!(report.errors.is_empty());
-        assert_eq!(report.written.len(), 3);
+        assert_eq!(report.written.len(), 4);
         assert_eq!(report.copied.len(), 1);
         // Relative source resolved against the project root.
         let copied_target = dir.join("res/drawable/image.png");
@@ -594,6 +631,12 @@ mod tests {
         let java = fs::read_to_string(dir.join("cfg/Cfg.java")).unwrap();
         assert!(java.contains("public static final String Name = \"新名称\";"));
         assert!(java.contains("public static final boolean Show = true;"));
+        // properties: bare value without any quotes, sibling key intact.
+        let props = fs::read_to_string(dir.join("local.properties")).unwrap();
+        assert!(props.contains("sdk.dir=C\\:\\New\\Sdk"));
+        assert!(!props.contains("sdk.dir='"));
+        assert!(!props.contains("sdk.dir=\""));
+        assert!(props.contains("ndk.dir=C\\:\\ndk\\old"));
 
         // dry_run: no disk changes.
         fs::write(
@@ -606,9 +649,76 @@ mod tests {
             strict: true,
         };
         let report = run(&dir, &spec_path, None, dry).unwrap();
-        assert_eq!(report.written.len(), 3);
+        assert_eq!(report.written.len(), 4);
         let xml = fs::read_to_string(dir.join("res/values/strings.xml")).unwrap();
         assert!(xml.contains(">old</string>"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// properties rules on signing keys (the DEBUG_* example): values land
+    /// bare in `key=value` lines; existing keys are overwritten in place.
+    #[test]
+    fn kernel_properties_signing_keys() {
+        let dir = test_dir("properties");
+        fs::write(
+            dir.join("local.properties"),
+            "sdk.dir=C\\:\\sdk\nDEBUG_STORE_FILE=old\nDEBUG_STORE_PASSWORD=old\nDEBUG_KEY_ALIAS=old\nDEBUG_KEY_PASSWORD=old\n",
+        )
+        .unwrap();
+
+        let spec_path = dir.join("dev.json");
+        fs::write(
+            &spec_path,
+            json!({
+                "DEBUG_STORE_FILE": {
+                    "write_mode": "argument",
+                    "file_path": "local.properties",
+                    "file_type": "properties",
+                    "key_name": "DEBUG_STORE_FILE",
+                    "value": "../keystore/xiaomi"
+                },
+                "DEBUG_STORE_PASSWORD": {
+                    "write_mode": "argument",
+                    "file_path": "local.properties",
+                    "file_type": "properties",
+                    "key_name": "DEBUG_STORE_PASSWORD",
+                    "value": "123456"
+                },
+                "DEBUG_KEY_ALIAS": {
+                    "write_mode": "argument",
+                    "file_path": "local.properties",
+                    "file_type": "properties",
+                    "key_name": "DEBUG_KEY_ALIAS",
+                    "value": "xiaomi"
+                },
+                "DEBUG_KEY_PASSWORD": {
+                    "write_mode": "argument",
+                    "file_path": "local.properties",
+                    "file_type": "properties",
+                    "key_name": "DEBUG_KEY_PASSWORD",
+                    "value": "123456"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let report = run(&dir, &spec_path, None, KernelOptions::default()).unwrap();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.written.len(), 4);
+
+        let props = fs::read_to_string(dir.join("local.properties")).unwrap();
+        assert!(props.contains("DEBUG_STORE_FILE=../keystore/xiaomi"));
+        assert!(props.contains("DEBUG_STORE_PASSWORD=123456"));
+        assert!(props.contains("DEBUG_KEY_ALIAS=xiaomi"));
+        assert!(props.contains("DEBUG_KEY_PASSWORD=123456"));
+        // Bare values: no quotes anywhere; unrelated keys untouched.
+        assert!(!props.contains("='"));
+        assert!(!props.contains("=\""));
+        assert!(props.contains("sdk.dir=C\\:\\sdk"));
+        // No stale values left.
+        assert!(!props.contains("=old"));
 
         let _ = fs::remove_dir_all(&dir);
     }

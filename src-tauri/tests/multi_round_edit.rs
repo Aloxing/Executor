@@ -39,6 +39,11 @@ fn work_dir() -> PathBuf {
     dir
 }
 
+/// Canonical copy sources used by every round (the test pins them in the
+/// round config so it stays self-contained even if test.json is edited).
+const ICON_SOURCE: &str = r"C:\Users\mfkj\Downloads\icon (63).jpg";
+const IMAGE_SOURCE: &str = r"C:\Users\mfkj\Downloads\健康 (30).png";
+
 /// Applies one round of argument-value edits on top of the base config.
 fn round_config(base: &Value, name: &str, version: &str, code: i64, banner: &str, date: &str, orientation: &str) -> Value {
     let mut config = base.clone();
@@ -48,7 +53,33 @@ fn round_config(base: &Value, name: &str, version: &str, code: i64, banner: &str
     config["xiaomi_ads_banner_id"]["value"] = json!(banner);
     config["xiaomi_ads_date_limit"]["value"] = json!(date);
     config["app_screen_orientation"]["value"] = json!(orientation);
+    config["app_icon"]["value"] = json!(ICON_SOURCE);
+    config["app_image"]["value"] = json!(IMAGE_SOURCE);
     config
+}
+
+/// Test-owned scene set, independent of whatever scenes test.json holds.
+fn test_scenes(args: Value) -> Value {
+    json!({
+        "VictoryGameLevelAD": {
+            "body": [
+                {
+                    "type": "ruled",
+                    "rule": { "template": "secondsLimit", "args": args },
+                    "call": { "callback": "tryShowNative", "args": [] }
+                }
+            ]
+        }
+    })
+}
+
+fn test_rule_templates() -> Value {
+    json!({
+        "secondsLimit": {
+            "class": "advertiseComplianceJob",
+            "method": "secondsLimit"
+        }
+    })
 }
 
 fn write_config(dir: &Path, round: &str, config: &Value) -> PathBuf {
@@ -86,8 +117,8 @@ fn multi_round_edit_overwrite_and_untouched_files() {
     }
     let base: Value = serde_json::from_str(&fs::read_to_string(&test_json).unwrap()).unwrap();
 
-    let icon_source = PathBuf::from(base["app_icon"]["value"].as_str().unwrap());
-    let image_source = PathBuf::from(base["app_image"]["value"].as_str().unwrap());
+    let icon_source = PathBuf::from(ICON_SOURCE);
+    let image_source = PathBuf::from(IMAGE_SOURCE);
     if !icon_source.is_file() || !image_source.is_file() {
         eprintln!("skip: copy source files not present");
         return;
@@ -122,7 +153,9 @@ fn multi_round_edit_overwrite_and_untouched_files() {
     let options = executor_lib::core::android::argument::KernelOptions::default();
 
     // ---------------- round 1 ------------------------------------------
-    let r1 = round_config(&base, "深渊远征", "1.0.4", 4, "round1-banner-id", "2026-07-01 12:00:00", "portrait");
+    let mut r1 = round_config(&base, "深渊远征", "1.0.4", 4, "round1-banner-id", "2026-07-01 12:00:00", "portrait");
+    r1["app_code_inject"]["scenes"] = test_scenes(json!(["native", 30]));
+    r1["app_code_inject"]["ruleTemplates"] = test_rule_templates();
     let r1_path = write_config(&work, "r1", &r1);
     let report = executor_lib::core::android::argument::run(&work, &r1_path, None, options).unwrap();
     assert!(report.errors.is_empty(), "{:?}", report.errors);
@@ -147,13 +180,14 @@ fn multi_round_edit_overwrite_and_untouched_files() {
     // ---------------- round 2: different values + changed scenes --------
     let mut r2 = round_config(&base, "星海征途", "1.0.5", 5, "round2-banner-id", "2026-08-01 08:30:00", "landscape");
     // Code change: existing scene gets new rule args, plus a brand-new scene.
-    r2["app_code_inject"]["scenes"]["VictoryGameLevelAD"]["body"][0]["rule"]["args"] =
-        json!(["banner", 45]);
-    r2["app_code_inject"]["scenes"]["RoundTwoScene"] = json!({
+    let mut scenes = test_scenes(json!(["banner", 45]));
+    scenes["RoundTwoScene"] = json!({
         "body": [
             { "type": "direct", "call": { "callback": "roundTwoCall", "args": ["tag", 2] } }
         ]
     });
+    r2["app_code_inject"]["scenes"] = scenes;
+    r2["app_code_inject"]["ruleTemplates"] = test_rule_templates();
     let r2_path = write_config(&work, "r2", &r2);
     let report = executor_lib::core::android::argument::run(&work, &r2_path, None, options).unwrap();
     assert!(report.errors.is_empty(), "{:?}", report.errors);

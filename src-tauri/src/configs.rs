@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
+use crate::core::android::{argument, code};
 use crate::core::settings::read_settings;
 
 /// One sub project attached to a config queue. Queues persist as a JSON
@@ -44,6 +45,11 @@ pub struct ConfigProject {
     /// Whether the contents were copied into the config area (recorded).
     #[serde(default)]
     pub recorded: bool,
+    /// Whether the template's code folder was already copied into the
+    /// project directory; the next launch skips the copy step and only
+    /// runs the kernels.
+    #[serde(default)]
+    pub code_copied: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -333,6 +339,9 @@ fn record_project(app: &tauri::AppHandle, project: &mut ConfigProject) -> Result
     copy_dir_all(&source, &target)
         .map_err(|e| format!("记录项目「{}」的内容失败：{e}", project.name))?;
     project.recorded = true;
+    // The config directory was rebuilt, so the template's code copy is
+    // stale and the next launch must copy it again.
+    project.code_copied = false;
     project.root_path = target.display().to_string();
     Ok(())
 }
@@ -459,7 +468,10 @@ fn find_project_mut<'a>(
 }
 
 /// Saves the selected template name and the modify-config time for one
-/// sub project without starting the configuration.
+/// sub project without starting the configuration. The template's
+/// parameter JSON (when present) is copied into the config area as
+/// `<workspace>/config/parameter/<package name>.json` for the parameter
+/// card.
 #[tauri::command]
 pub fn save_config_template(
     app: tauri::AppHandle,
@@ -475,10 +487,16 @@ pub fn save_config_template(
         return Err("请选择配置模板".to_string());
     }
     let mut list = load_queues(&app)?;
-    {
+    let package_name = {
         let project = find_project_mut(&mut list, &queue_uuid, &project_uuid)?;
-        project.template_name = Some(template_name);
+        project.template_name = Some(template_name.clone());
         project.config_time = Some(config_time);
+        // A new template means the copied code content is stale.
+        project.code_copied = false;
+        project.package_name.clone()
+    };
+    if let Some(package_name) = package_name.filter(|s| !s.is_empty()) {
+        copy_parameter_file(&app, &template_name, &package_name)?;
     }
     let updated = list
         .iter()
@@ -487,6 +505,213 @@ pub fn save_config_template(
         .ok_or_else(|| "未找到配置队列".to_string())?;
     save_queues(&app, &list)?;
     Ok(updated)
+}
+
+/// Copies the template's parameter JSON (`templates/<name>/parameter/
+/// <name>.json`) into `config/parameter/<package name>.json`. Templates
+/// without a parameter file are skipped silently.
+fn copy_parameter_file(
+    app: &tauri::AppHandle,
+    template_name: &str,
+    package_name: &str,
+) -> Result<(), String> {
+    let source = workspace_dir(app)?
+        .join("templates")
+        .join(template_name)
+        .join("parameter")
+        .join(format!("{template_name}.json"));
+    if !source.is_file() {
+        return Ok(());
+    }
+    let target_dir = config_dir(app)?.join("parameter");
+    fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建参数目录：{e}"))?;
+    fs::copy(&source, target_dir.join(format!("{package_name}.json")))
+        .map_err(|e| format!("复制参数文件失败：{e}"))?;
+    Ok(())
+}
+
+/// Parameter file path of a project located by uuid across every queue.
+fn parameter_path_of(app: &tauri::AppHandle, project_uuid: &str) -> Result<PathBuf, String> {
+    let project_uuid = project_uuid.trim().to_string();
+    let list = load_queues(app)?;
+    let package_name = list
+        .iter()
+        .flat_map(|q| q.projects.iter())
+        .find(|p| p.uuid == project_uuid)
+        .ok_or_else(|| "未找到项目".to_string())?
+        .package_name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "项目缺少包名，无法读写参数文件".to_string())?;
+    Ok(config_dir(app)?
+        .join("parameter")
+        .join(format!("{package_name}.json")))
+}
+
+/// Reads the project's parameter JSON content for in-card editing.
+#[tauri::command]
+pub fn read_project_parameter(
+    app: tauri::AppHandle,
+    project_uuid: String,
+) -> Result<String, String> {
+    let path = parameter_path_of(&app, &project_uuid)?;
+    if !path.is_file() {
+        return Err("参数文件不存在，请先选择配置模板".to_string());
+    }
+    fs::read_to_string(&path).map_err(|e| format!("读取参数文件失败：{e}"))
+}
+
+/// Re-copies the selected template's parameter JSON from the templates
+/// page into the config area and returns the fresh content, overwriting
+/// the project's current parameter file.
+#[tauri::command]
+pub fn refresh_project_parameter(
+    app: tauri::AppHandle,
+    project_uuid: String,
+) -> Result<String, String> {
+    let project_uuid = project_uuid.trim().to_string();
+    let list = load_queues(&app)?;
+    let project = list
+        .iter()
+        .flat_map(|q| q.projects.iter())
+        .find(|p| p.uuid == project_uuid)
+        .ok_or_else(|| "未找到项目".to_string())?;
+    let template_name = project
+        .template_name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "项目尚未选择配置模板".to_string())?;
+    let package_name = project
+        .package_name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "项目缺少包名，无法更新参数文件".to_string())?;
+    let source = workspace_dir(&app)?
+        .join("templates")
+        .join(&template_name)
+        .join("parameter")
+        .join(format!("{template_name}.json"));
+    if !source.is_file() {
+        return Err(format!("模板「{template_name}」没有参数文件，无法更新"));
+    }
+    copy_parameter_file(&app, &template_name, &package_name)?;
+    let path = parameter_path_of(&app, &project_uuid)?;
+    fs::read_to_string(&path).map_err(|e| format!("读取参数文件失败：{e}"))
+}
+
+/// Saves edited parameter JSON content; entries of other write modes are
+/// kept untouched for the code kernel.
+#[tauri::command]
+pub fn write_project_parameter(
+    app: tauri::AppHandle,
+    project_uuid: String,
+    content: String,
+) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(&content)
+        .map_err(|e| format!("参数内容不是合法 JSON：{e}"))?;
+    let path = parameter_path_of(&app, &project_uuid)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("无法创建参数目录：{e}"))?;
+    }
+    fs::write(&path, content).map_err(|e| format!("保存参数文件失败：{e}"))
+}
+
+/// Launches a recorded project: copies the selected template's `code`
+/// folder contents into the project's config directory (same-name files
+/// are overwritten), then runs the argument kernel followed by the code
+/// kernel using `<package name>.json` against that directory. Runs on the
+/// async thread pool so the UI stays responsive.
+#[tauri::command]
+pub async fn execute_config_project(
+    app: tauri::AppHandle,
+    project_uuid: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_execute_project(&app, &project_uuid))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn run_execute_project(app: &tauri::AppHandle, project_uuid: &str) -> Result<String, String> {
+    let project_uuid = project_uuid.trim().to_string();
+    let mut list = load_queues(app)?;
+    let project = list
+        .iter()
+        .flat_map(|q| q.projects.iter())
+        .find(|p| p.uuid == project_uuid)
+        .ok_or_else(|| "未找到项目".to_string())?
+        .clone();
+
+    let template_name = project
+        .template_name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "项目尚未选择配置模板".to_string())?;
+    let package_name = project
+        .package_name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "项目缺少包名，无法执行".to_string())?;
+    let project_root = PathBuf::from(project.root_path.trim());
+    if !project.recorded || !project_root.is_dir() {
+        return Err("项目尚未记录，请先记录项目".to_string());
+    }
+
+
+    // 1. Copy the template's code folder into the project's config
+    //    directory (first launch only); same-name files are overwritten
+    //    directly. Once copied, the flag makes later launches skip this
+    //    step and run the kernels only.
+    if !project.code_copied {
+        let code_source = workspace_dir(app)?
+            .join("templates")
+            .join(&template_name)
+            .join("code");
+        if !code_source.is_dir() {
+            return Err(format!("模板「{template_name}」没有 code 文件夹，无法完善配置"));
+        }
+        copy_dir_all(&code_source, &project_root)
+            .map_err(|e| format!("复制模板 code 内容失败：{e}"))?;
+        if let Some(target) = list
+            .iter_mut()
+            .flat_map(|q| q.projects.iter_mut())
+            .find(|p| p.uuid == project_uuid)
+        {
+            target.code_copied = true;
+        }
+        save_queues(app, &list)?;
+    }
+
+    // 2. Run the argument kernel, then the code kernel, both driven by the
+    //    package-named parameter JSON against the project directory.
+    let config_path = parameter_path_of(app, &project_uuid)?;
+    if !config_path.is_file() {
+        return Err(format!(
+            "包名「{package_name}」的参数文件不存在，请先选择配置模板"
+        ));
+    }
+    let report = argument::run(&project_root, &config_path, None, argument::KernelOptions::default())
+        .map_err(|e| format!("argument 内核执行失败：{e}"))?;
+    let results = code::run(&project_root, &config_path)
+        .map_err(|e| format!("code 内核执行失败：{e}"))?;
+
+    let failed: Vec<String> = results
+        .iter()
+        .filter(|r| !r.skipped && !r.success)
+        .map(|r| r.error.clone().unwrap_or_else(|| "未知错误".to_string()))
+        .collect();
+    if !failed.is_empty() {
+        return Err(format!("code 内核部分任务失败：{}", failed.join("；")));
+    }
+
+    let code_success = results.iter().filter(|r| !r.skipped && r.success).count();
+    let methods: usize = results.iter().map(|r| r.methods_generated).sum();
+    Ok(format!(
+        "注入完成：参数写入 {} 项、复制文件 {} 个；代码任务成功 {} 个、生成方法 {} 个",
+        report.written.len(),
+        report.copied.len(),
+        code_success,
+        methods
+    ))
 }
 
 /// Marks a sub project as configured (已配置) and records the start
@@ -651,6 +876,13 @@ fn run_reload_project(
     }
     copy_dir_all(&source, &target)
         .map_err(|e| format!("重新加载包名「{package_name}」的内容失败：{e}"))?;
+    {
+        let project = find_project_mut(&mut list, queue_uuid, project_uuid)?;
+        // The config directory was rebuilt, so the template's code copy
+        // is stale and the next launch must copy it again.
+        project.code_copied = false;
+    }
+    save_queues(app, &list)?;
     list.iter()
         .find(|q| q.uuid == queue_uuid)
         .cloned()
@@ -684,11 +916,16 @@ fn run_delete_projects(
     }
     let mut list = load_queues(&app)?;
 
-    // Collect the copied folders of the removed projects.
+    // Collect the copied folders and the package names (parameter JSON
+    // files) of the removed projects.
     let mut removed_paths: Vec<PathBuf> = Vec::new();
+    let mut removed_packages: Vec<String> = Vec::new();
     for queue in list.iter_mut() {
         for project in queue.projects.iter().filter(|p| targets.contains(&p.uuid)) {
             removed_paths.push(PathBuf::from(project.root_path.clone()));
+            if let Some(package_name) = project.package_name.clone().filter(|s| !s.is_empty()) {
+                removed_packages.push(package_name);
+            }
         }
         queue.projects.retain(|p| !targets.contains(&p.uuid));
     }
@@ -709,6 +946,26 @@ fn run_delete_projects(
         if path.is_dir() {
             fs::remove_dir_all(&path)
                 .map_err(|e| format!("无法删除配置目录 {}：{e}", path.display()))?;
+        }
+    }
+
+    // Also drop the package-named parameter JSON, unless a remaining
+    // project still uses the same package name.
+    let kept_packages: HashSet<String> = list
+        .iter()
+        .flat_map(|q| q.projects.iter())
+        .filter_map(|p| p.package_name.clone())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let parameter_dir = config.join("parameter");
+    for package_name in removed_packages {
+        if kept_packages.contains(&package_name) {
+            continue;
+        }
+        let json_path = parameter_dir.join(format!("{package_name}.json"));
+        if json_path.is_file() {
+            fs::remove_file(&json_path)
+                .map_err(|e| format!("无法删除参数文件 {}：{e}", json_path.display()))?;
         }
     }
 

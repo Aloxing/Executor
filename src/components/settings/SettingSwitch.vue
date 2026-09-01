@@ -1,6 +1,8 @@
 <script setup lang="ts">
 const props = defineProps<{
   modelValue: boolean
+  /** Tailwind background class for the on state (defaults to primary). */
+  activeClass?: string
 }>()
 
 const emit = defineEmits<{
@@ -18,7 +20,7 @@ function toggle() {
     role="switch"
     :aria-checked="modelValue"
     class="relative inline-flex h-[18px] w-[32px] shrink-0 cursor-pointer items-center rounded-full border-none transition-colors duration-200 focus-visible:outline-none"
-    :class="modelValue ? 'bg-primary' : 'bg-muted'"
+    :class="modelValue ? activeClass ?? 'bg-primary' : 'bg-muted'"
     @click="toggle"
   >
     <span

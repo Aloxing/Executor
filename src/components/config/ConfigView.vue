@@ -17,6 +17,7 @@ import {
   addConfigProject,
   deleteConfigProjects,
   deleteConfigQueues,
+  executeConfigProject,
   listConfigQueues,
   recordAllConfigProjects,
   recordConfigProject,
@@ -59,6 +60,10 @@ const pickQueue = ref<ConfigQueue | null>(null)
 // Sub card waiting for remove confirmation.
 const pendingRemove = ref<{ queue: ConfigQueue; project: ConfigProject } | null>(null)
 const removing = ref(false)
+// Project waiting for the launch (完善配置) confirmation; the uuid of the
+// one currently executing drives the card's loading state.
+const pendingExecute = ref<ConfigProject | null>(null)
+const executingUuid = ref("")
 // True while the disk directory dialog/attach is running.
 const attachingDisk = ref(false)
 // Naming modal state after picking a directory from disk.
@@ -382,6 +387,32 @@ async function confirmRemove() {
   }
 }
 
+// --- Launch (kernel injection) ----------------------------------------------
+
+function onExecuteProject(project: ConfigProject) {
+  pendingExecute.value = project
+}
+
+// After the user confirms: copy the template's code folder into the
+// project's config directory, then run the argument kernel followed by
+// the code kernel using the package-named parameter JSON.
+async function confirmExecute() {
+  const target = pendingExecute.value
+  if (!target || executingUuid.value) return
+  executingUuid.value = target.uuid
+  try {
+    const summary = await executeConfigProject(target.uuid)
+    pendingExecute.value = null
+    // The backend marks the project as code-copied; refresh local state.
+    await reload()
+    showToast(summary, "success")
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "启动失败，请重试")
+  } finally {
+    executingUuid.value = ""
+  }
+}
+
 // --- Sub project config actions ---------------------------------------------
 
 function onProjectContextMenu(
@@ -665,7 +696,9 @@ async function onRecordAll() {
               :project="project"
               :select-mode="selectTarget === 'projects'"
               :selected="selectedProjects.has(project.uuid)"
+              :executing="executingUuid === project.uuid"
               @edit="onEditDirectoryProject(project)"
+              @execute="onExecuteProject(project)"
               @delete="onDeleteDirectoryProject(project)"
               @toggle-select="toggleProject(project.uuid)"
             />
@@ -747,6 +780,19 @@ async function onRecordAll() {
       :busy="removing"
       @cancel="pendingRemove = null"
       @confirm="confirmRemove"
+    />
+    <ConfirmDialog
+      v-if="pendingExecute"
+      title="完善配置"
+      :message="
+        pendingExecute.codeCopied
+          ? '模板 code 内容已复制过，本次启动仅执行 argument 与 code 内核注入。是否继续？'
+          : `是否完善配置？确认后将模板「${pendingExecute.templateName ?? ''}」的 code 内容复制到项目配置目录（同名文件直接覆盖），并依次执行 argument 与 code 内核注入。`
+      "
+      confirm-label="确认"
+      :busy="executingUuid !== ''"
+      @cancel="pendingExecute = null"
+      @confirm="confirmExecute"
     />
     <CalendarPicker
       v-if="calendar"

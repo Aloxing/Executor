@@ -259,8 +259,41 @@ fn generate_method(
     rule_templates: &Map<String, Value>,
     log_tag: &str,
 ) -> Result<String, String> {
+    // Optional signature fields: returnType defaults to "void" and params
+    // to an empty list, keeping the original signature when omitted.
+    let return_type = {
+        let rt = scene_def
+            .get("returnType")
+            .or_else(|| scene_def.get("return_type"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if rt.is_empty() { "void".to_string() } else { rt }
+    };
+    let params = scene_def
+        .get("params")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|param| {
+                    let obj = param.as_object()?;
+                    let name = obj.get("name").and_then(Value::as_str)?.trim();
+                    let ty = obj.get("type").and_then(Value::as_str)?.trim();
+                    if name.is_empty() || ty.is_empty() {
+                        None
+                    } else {
+                        Some(format!("{ty} {name}"))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+
     let mut lines = vec![
-        format!("    public void {scene_name}() {{"),
+        format!("    public {return_type} {scene_name}({params}) {{"),
         format!("        Log.i({log_tag}, \"{scene_name}: \");"),
     ];
     let body = scene_def.get("body").and_then(Value::as_array);
@@ -292,6 +325,15 @@ fn generate_method(
             _ => continue,
         };
         lines.push(format!("        {statement}"));
+    }
+    // Optional trailing return expression for non-void methods.
+    if let Some(expr) = scene_def
+        .get("return")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|expr| !expr.is_empty())
+    {
+        lines.push(format!("        return {expr};"));
     }
     lines.push("    }".to_string());
     Ok(lines.join("\n"))
@@ -342,14 +384,20 @@ fn build_ruled_call(
     Ok(format!("{obj_class}.{method}({all_args});"))
 }
 
-/// Python-style argument formatting: strings are quoted, everything else
-/// uses Python's `str()` rendering (bools as True/False etc.).
+/// Python-style argument formatting: strings are quoted, `{"var": name}`
+/// objects render as bare variable references, everything else uses
+/// Python's `str()` rendering (bools as True/False etc.).
 fn format_args_list(args: Option<&Vec<Value>>) -> String {
     args.map(|items| {
         items
             .iter()
             .map(|arg| match arg {
                 Value::String(s) => format!("\"{s}\""),
+                Value::Object(map) if map.contains_key("var") => map
+                    .get("var")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 other => crate::core::android::argument::display(other),
             })
             .collect::<Vec<_>>()
@@ -541,6 +589,64 @@ mod tests {
             "not-an-object"
         ]));
         assert_eq!(from_array.len(), 1);
+    }
+
+    /// New scene fields: returnType, params and a trailing return
+    /// expression control the generated method signature.
+    #[test]
+    fn generate_method_with_return_type_and_params() {
+        let config = object(json!({
+            "scenes": {
+                "Template1": {
+                    "returnType": "void",
+                    "params": [
+                        { "name": "levelId", "type": "int" },
+                        { "name": "reward", "type": "String" }
+                    ],
+                    "body": [
+                        { "type": "direct", "call": { "callback": "show", "args": [] } }
+                    ]
+                },
+                "Template2": {
+                    "returnType": "String",
+                    "params": [ { "name": "helper", "type": "String" } ],
+                    "return": "\"video_shown\"",
+                    "body": []
+                }
+            }
+        }));
+        let code = generate_code(&config).unwrap();
+        assert!(code.contains("    public void Template1(int levelId, String reward) {"));
+        assert!(code.contains("    public String Template2(String helper) {"));
+        assert!(code.contains("        return \"video_shown\";"));
+        // Body statements come before the trailing return.
+        let t2 = code.split("public String Template2").nth(1).unwrap();
+        let log_pos = t2.find("Log.i").unwrap();
+        let ret_pos = t2.find("return").unwrap();
+        assert!(log_pos < ret_pos);
+    }
+
+    /// Dedup matches old methods that carry formal parameters, so a
+    /// regenerated method replaces its parameterized predecessor.
+    #[test]
+    fn dedup_removes_parameterized_old_method() {
+        let old_code = "    public void Template1(int levelId, String reward) {\n        old();\n    }\n";
+        let names = vec!["Template1".to_string()];
+        let cleaned = remove_existing_methods(old_code, &names);
+        assert!(!cleaned.contains("old();"));
+        assert!(!cleaned.contains("Template1"));
+    }
+
+    /// Extension fields are optional: omitting them keeps the classic
+    /// `public void Name() {` signature (Python parity).
+    #[test]
+    fn signature_defaults_without_extension_fields() {
+        let config = object(json!({
+            "scenes": { "Plain": { "body": [] } }
+        }));
+        let code = generate_code(&config).unwrap();
+        assert!(code.contains("    public void Plain() {"));
+        assert!(!code.contains("return"));
     }
 
     /// Generation matches the Python reference: direct + ruled calls,

@@ -23,9 +23,10 @@ use android_projects::{
 };
 use configs::{
     add_config_project, create_config_queue, delete_config_projects, delete_config_queues,
-    list_config_queues, record_all_config_projects, record_config_project,
+    execute_config_project, list_config_queues, read_project_parameter,
+    record_all_config_projects, record_config_project, refresh_project_parameter,
     reload_config_project, remove_config_project, save_config_template, start_config_project,
-    update_config_project,
+    update_config_project, write_project_parameter,
 };
 use imports::{create_import_queue, delete_queues, list_import_queues};
 use templates::{
@@ -86,6 +87,10 @@ pub fn run() {
             reload_config_project,
             record_config_project,
             record_all_config_projects,
+            read_project_parameter,
+            write_project_parameter,
+            refresh_project_parameter,
+            execute_config_project,
             ensure_workspace_areas
         ])
         .setup(move |app| {

@@ -9,11 +9,12 @@ use serde_json::Value;
 use super::values::Kind;
 
 /// Dispatches to the writer registered for `file_type`, mirroring the
-/// `WRITERS` table (xml / gradle,kts,properties / java,kt,cs).
+/// `WRITERS` table (xml / gradle,kts / properties / java,kt,cs).
 pub fn write(file_type: &str, text: &str, key: &str, value: &Value, kind: Kind) -> Result<String, String> {
     match file_type {
         "xml" => xml_write(text, key, value, kind),
-        "gradle" | "kts" | "properties" => gradle_write(text, key, value, kind),
+        "gradle" | "kts" => gradle_write(text, key, value, kind),
+        "properties" => properties_write(text, key, value, kind),
         "java" | "kt" | "cs" => java_write(text, key, value, kind),
         _ => Err(format!("暂不支持的 file_type: {file_type}")),
     }
@@ -163,6 +164,31 @@ fn gradle_write(text: &str, key: &str, value: &Value, kind: Kind) -> Result<Stri
 }
 
 // ----------------------------------------------------------------------
+// properties: key=value lines with BARE values (no quotes at all).
+// The injected value is written verbatim, so config values may carry the
+// java-properties escaping themselves (e.g. `C\:\\Users\\...`).
+// ----------------------------------------------------------------------
+
+fn properties_write(text: &str, key: &str, value: &Value, kind: Kind) -> Result<String, String> {
+    let rendered = match kind {
+        Kind::Bool => match value {
+            Value::Bool(b) => b.to_string(),
+            _ => "false".to_string(),
+        },
+        _ => super::values::display(value),
+    };
+    let pattern = format!(
+        r#"(?m)(^[ \t]*{}[ \t]*[=:][ \t]*)([^\r\n]*)"#,
+        regex::escape(key)
+    );
+    let (new_text, count) = sub_all(&pattern, text, |caps| format!("{}{}", &caps[1], rendered));
+    if count == 0 {
+        return Err(format!("properties 中未找到键: {key}"));
+    }
+    Ok(new_text)
+}
+
+// ----------------------------------------------------------------------
 // java: public static final String KEY = "..."; (type is corrected to the
 // value kind, mirroring the Python replacement function)
 // ----------------------------------------------------------------------
@@ -250,6 +276,26 @@ mod tests {
         let out = gradle_write(text, "applicationId", &json!("com.cn.aloxing.xiaomi"), Kind::String).unwrap();
         assert!(out.contains("applicationId 'com.cn.aloxing.xiaomi'"));
         assert!(gradle_write(text, "noSuchKey", &json!("x"), Kind::String).is_err());
+    }
+
+    #[test]
+    fn properties_bare_values() {
+        let text = "# header comment\nndk.dir=C\\:\\Users\\mfkj\\ndk\nsdk.dir=C\\:\\Users\\mfkj\\sdk\napp.debug=false\n";
+        // String values are written bare: no double/single quotes, and the
+        // config value keeps its own properties escaping.
+        let out = write("properties", text, "sdk.dir", &json!(r"C\:\\Android\\Sdk"), Kind::String).unwrap();
+        // Value written verbatim (escaped backslashes preserved), and
+        // without any surrounding quotes.
+        assert!(out.contains("sdk.dir=C\\:\\\\Android\\\\Sdk"));
+        assert!(!out.contains("sdk.dir='"));
+        assert!(!out.contains("sdk.dir=\""));
+        // Other keys (incl. escaped sibling ndk.dir) stay untouched.
+        assert!(out.contains("ndk.dir=C\\:\\Users\\mfkj\\ndk"));
+        // Booleans are rendered as true/false literals.
+        let out = write("properties", text, "app.debug", &json!(true), Kind::Bool).unwrap();
+        assert!(out.contains("app.debug=true"));
+        // Missing keys report an error.
+        assert!(write("properties", text, "no.such.key", &json!("x"), Kind::String).is_err());
     }
 
     #[test]
