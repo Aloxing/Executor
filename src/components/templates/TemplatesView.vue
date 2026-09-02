@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { CheckSquare, Plus, Search, Trash2, X } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import JsonEditorModal from "../JsonEditorModal.vue"
 import CreateTemplateModal from "./CreateTemplateModal.vue"
 import DeleteConfirmDialog from "./DeleteConfirmDialog.vue"
@@ -23,6 +24,16 @@ const templates = ref<TemplateInfo[]>([])
 const showCreate = ref(false)
 const editing = ref<TemplateInfo | null>(null)
 const keyword = ref("")
+// Search input focused through the central search shortcut.
+const searchInput = ref<HTMLInputElement | null>(null)
+
+// Page-level shortcuts: primary create button and search focus.
+useShortcut("create", () => {
+  showCreate.value = true
+})
+useShortcut("search", () => {
+  searchInput.value?.focus()
+})
 
 // Batch selection state.
 const selectMode = ref(false)
@@ -249,6 +260,7 @@ function importParameterFromMenu() {
           class="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
         />
         <input
+          ref="searchInput"
           v-model="keyword"
           type="text"
           placeholder="搜索模板名称、类型或介绍"

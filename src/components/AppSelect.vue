@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Check, ChevronDown } from "lucide-vue-next"
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 
 const props = defineProps<{
   modelValue: string
@@ -73,23 +74,24 @@ function onDocumentMousedown(event: MouseEvent) {
   open.value = false
 }
 
-function onDocumentKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") open.value = false
-}
+// While open, the central close shortcut (Esc by default) closes the
+// dropdown; otherwise the event falls through to the next handler.
+useShortcut("close", () => {
+  if (!open.value) return false
+  open.value = false
+  return true
+})
 
 watch(open, (visible) => {
   if (visible) {
     document.addEventListener("mousedown", onDocumentMousedown)
-    document.addEventListener("keydown", onDocumentKeydown)
   } else {
     document.removeEventListener("mousedown", onDocumentMousedown)
-    document.removeEventListener("keydown", onDocumentKeydown)
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocumentMousedown)
-  document.removeEventListener("keydown", onDocumentKeydown)
 })
 </script>
 

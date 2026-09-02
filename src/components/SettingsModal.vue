@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { Hammer, HardDrive, Info, Palette, Settings, X } from "lucide-vue-next"
-import { onMounted, onUnmounted, ref, type Component } from "vue"
+import { ref, type Component } from "vue"
 import GeneralSettings from "./settings/GeneralSettings.vue"
 import AppearanceSettings from "./settings/AppearanceSettings.vue"
+import CompileSettings from "./settings/CompileSettings.vue"
 import StorageSettings from "./settings/StorageSettings.vue"
+import { useShortcut } from "@/lib/shortcuts"
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -29,23 +31,17 @@ function selectTab(tab: SettingsTab) {
   activeTab.value = tab
 }
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+// Closing is driven by the central shortcut system (Esc by default).
+useShortcut("close", () => emit("close"))
 </script>
 
 <template>
   <div class="fixed inset-0 z-50 flex items-center justify-center p-[3%]">
+    <!-- Backdrop: plain translucent fill — backdrop-blur is very
+         expensive here because the WebView runs with GPU disabled
+         (software compositing), which made opening laggy -->
     <div
-      class="animate-backdrop-fade bg-black/40 absolute inset-0 backdrop-blur-sm"
+      class="animate-backdrop-fade bg-black/40 absolute inset-0"
       aria-hidden="true"
       @click="emit('close')"
     />
@@ -95,18 +91,22 @@ onUnmounted(() => {
             <span class="truncate">{{ tab.label }}</span>
           </button>
         </nav>
+        <!-- Tabs are kept alive so switching never rebuilds them -->
         <div class="flex min-w-0 flex-1 flex-col overflow-auto p-[17px]">
-          <GeneralSettings v-if="activeTab.key === 'general'" />
-          <AppearanceSettings v-else-if="activeTab.key === 'appearance'" />
-          <StorageSettings v-else-if="activeTab.key === 'storage'" />
-          <div
-            v-else
-            class="flex flex-1 items-center justify-center"
-          >
-            <p class="text-muted-foreground text-xs">
-              {{ activeTab.label }} · 即将上线
-            </p>
-          </div>
+          <KeepAlive>
+            <GeneralSettings v-if="activeTab.key === 'general'" />
+            <AppearanceSettings v-else-if="activeTab.key === 'appearance'" />
+            <CompileSettings v-else-if="activeTab.key === 'compile'" />
+            <StorageSettings v-else-if="activeTab.key === 'storage'" />
+            <div
+              v-else
+              class="flex flex-1 items-center justify-center"
+            >
+              <p class="text-muted-foreground text-xs">
+                {{ activeTab.label }} · 即将上线
+              </p>
+            </div>
+          </KeepAlive>
         </div>
       </div>
     </div>

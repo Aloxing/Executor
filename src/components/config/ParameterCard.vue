@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Calendar, FileUp, Loader2, Plus, RefreshCw, Save, Trash2, X } from "lucide-vue-next"
-import { computed, onMounted, onUnmounted, ref } from "vue"
+import { computed, onMounted, ref } from "vue"
 import AppSelect from "../AppSelect.vue"
 import CalendarPicker from "../import/CalendarPicker.vue"
 import SettingSwitch from "../settings/SettingSwitch.vue"
+import { useShortcut } from "@/lib/shortcuts"
 import {
   readProjectParameter,
   refreshProjectParameter,
@@ -493,17 +494,16 @@ async function pickFile(name: string) {
   }
 }
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape" && calendar.value) calendar.value = null
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
+// The calendar popover and saving are driven by the central shortcuts;
+// without an open calendar the close event falls through to other layers.
+useShortcut("close", () => {
+  if (calendar.value) {
+    calendar.value = null
+    return true
+  }
+  return false
 })
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+useShortcut("save", () => save())
 
 // --- Actions -----------------------------------------------------------------
 

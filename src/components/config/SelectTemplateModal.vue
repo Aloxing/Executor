@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Check, X } from "lucide-vue-next"
-import { onMounted, onUnmounted, ref } from "vue"
+import { onMounted, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import { listTemplates, type TemplateInfo } from "@/lib/templates"
 import { formatNow } from "@/lib/templates"
 
@@ -22,17 +23,13 @@ const saving = ref(false)
 const configTime = formatNow()
 
 onMounted(async () => {
-  window.addEventListener("keydown", onKeydown)
   templates.value = await listTemplates()
 })
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+// Closing and saving are driven by the central shortcut system; ctrl+s
+// runs the non-starting 「仅保存」 action.
+useShortcut("close", () => emit("close"))
+useShortcut("save", () => submit(false))
 
 function submit(start: boolean) {
   if (saving.value || !selectedName.value) return

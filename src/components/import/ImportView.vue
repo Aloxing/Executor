@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Calendar, CheckSquare, ListPlus, Search, Trash2, X } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import AndroidProjectModal from "./AndroidProjectModal.vue"
 import CalendarPicker from "./CalendarPicker.vue"
 import ConfirmDialog from "./ConfirmDialog.vue"
@@ -20,6 +21,7 @@ import {
   type AndroidProject,
 } from "@/lib/android"
 import { deleteQueues, listImportQueues, type ImportQueue } from "@/lib/queues"
+import { openInExplorer } from "@/lib/templates"
 import { showToast } from "@/lib/toast"
 
 const queues = ref<ImportQueue[]>([])
@@ -27,6 +29,16 @@ const projects = ref<AndroidProject[]>([])
 
 // Create-queue modal state.
 const showCreate = ref(false)
+// Search input focused through the central search shortcut.
+const searchInput = ref<HTMLInputElement | null>(null)
+
+// Page-level shortcuts: primary create button and search focus.
+useShortcut("create", () => {
+  showCreate.value = true
+})
+useShortcut("search", () => {
+  searchInput.value?.focus()
+})
 // Right-click context menu state.
 const menu = ref<{ x: number; y: number; queue: ImportQueue } | null>(null)
 // Add/edit Android project modal state.
@@ -345,11 +357,28 @@ async function onRecordProject() {
   try {
     await importAndroidProject(target.project.packageName)
     showToast(`项目「${target.project.appName}」记录完成`, "success")
-  } catch (e) {
-    showToast(typeof e === "string" ? e : "记录失败，请重试")
+  } catch (e) {    showToast(typeof e === "string" ? e : "记录失败，请重试")
   } finally {
     importingUuid.value = ""
     await reload()
+  }
+}
+
+// Locate the project: imported copies open their imported location,
+// otherwise the original disk directory.
+async function onLocateProject() {
+  const target = subMenu.value
+  if (!target) return
+  subMenu.value = null
+  const dir = target.project.location || target.project.rootPath
+  if (!dir) {
+    showToast("该项目暂无可定位的目录")
+    return
+  }
+  try {
+    await openInExplorer(dir)
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "定位失败")
   }
 }
 </script>
@@ -367,6 +396,7 @@ async function onRecordProject() {
           class="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
         />
         <input
+          ref="searchInput"
           v-model="projectKeyword"
           type="text"
           placeholder="搜索项目，支持名称或包名"
@@ -550,6 +580,7 @@ async function onRecordProject() {
               @edit="onEditProject(project)"
               @delete="onDeleteProject(project)"
               @toggle-select="toggleProject(project.packageName)"
+              @contextmenu="onProjectContextMenu(project, $event)"
             />
           </template>
           <div v-else class="flex flex-1 items-center justify-center">
@@ -586,6 +617,7 @@ async function onRecordProject() {
       :project="subMenu.project"
       @close="subMenu = null"
       @record="onRecordProject"
+      @locate="onLocateProject"
     />
     <AndroidProjectModal
       v-if="projectModal"

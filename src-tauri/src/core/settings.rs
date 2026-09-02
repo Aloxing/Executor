@@ -21,6 +21,23 @@ pub struct AppSettings {
     pub workspace_path: String,
     #[serde(default = "default_theme_mode")]
     pub theme_mode: String,
+    /// Gradle installations available to the build area (the gradle
+    /// executable lives in `<path>/bin`). Multiple versions are allowed.
+    #[serde(default)]
+    pub gradle_envs: Vec<GradleEnv>,
+    /// Customized keyboard shortcuts per action id; actions without an
+    /// entry use the frontend defaults.
+    #[serde(default)]
+    pub shortcuts: std::collections::HashMap<String, String>,
+}
+
+/// One Gradle environment: an installation directory picked in the
+/// settings compile tab, persisted with the settings in the data dir.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GradleEnv {
+    pub name: String,
+    pub path: String,
 }
 
 pub fn default_close_behavior() -> String {
@@ -37,6 +54,8 @@ impl Default for AppSettings {
             close_behavior: default_close_behavior(),
             workspace_path: String::new(),
             theme_mode: default_theme_mode(),
+            gradle_envs: Vec::new(),
+            shortcuts: std::collections::HashMap::new(),
         }
     }
 }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ChevronLeft, ChevronRight } from "lucide-vue-next"
-import { computed, onMounted, onUnmounted, ref } from "vue"
+import { computed, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 
 const props = defineProps<{
   x: number
@@ -76,17 +77,8 @@ function nextMonth() {
   }
 }
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+// Closing is driven by the central shortcut system (Esc by default).
+useShortcut("close", () => emit("close"))
 
 // Keep the popover inside the viewport (approximate size 252x310).
 const position = computed(() => ({

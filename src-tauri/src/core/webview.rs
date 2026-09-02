@@ -29,3 +29,22 @@ pub fn set_webview_memory_level(window: &WebviewWindow, level: MemoryUsageLevel)
 
 #[cfg(not(windows))]
 pub fn set_webview_memory_level(_window: &WebviewWindow, _level: MemoryUsageLevel) {}
+
+/// Hands browser accelerator keys (Ctrl+F find bar, Ctrl+S save dialog,
+/// Ctrl+P print…) over to the app's own shortcut system.
+#[cfg(windows)]
+pub fn disable_browser_accelerator_keys(window: &WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows_core::Interface;
+
+    let _ = window.with_webview(move |webview| unsafe {
+        if let Ok(core) = webview.controller().CoreWebView2() {
+            if let Ok(settings3) = core.cast::<ICoreWebView2Settings3>() {
+                let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false.into());
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn disable_browser_accelerator_keys(_window: &WebviewWindow) {}

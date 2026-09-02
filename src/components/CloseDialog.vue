@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { X } from "lucide-vue-next"
-import { onMounted, onUnmounted, ref } from "vue"
+import { ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 
 export type CloseAction = "tray" | "exit"
 
@@ -11,17 +12,8 @@ const emit = defineEmits<{
 
 const remember = ref(false)
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("cancel")
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+// Cancelling is driven by the central shortcut system (Esc by default).
+useShortcut("close", () => emit("cancel"))
 </script>
 
 <template>

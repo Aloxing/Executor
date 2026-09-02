@@ -137,6 +137,14 @@ pub fn create_config_queue(
     };
     list.push(queue.clone());
     save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "add",
+        "创建配置队列",
+        &format!("类型：{}", queue.queue_type),
+        vec![queue.name.clone()],
+    );
     Ok(queue)
 }
 
@@ -157,12 +165,20 @@ fn is_duplicate(queue: &ConfigQueue, project: &ConfigProject) -> bool {
 }
 
 /// Recursively copies the contents of `src` into `dst`.
+///
+/// Gradle-regenerated directories (`.gradle`, `build`, `.kotlin`) are
+/// skipped: they are locked while a build is running — which used to make
+/// the whole copy fail — and they are large, regenerable caches/artifacts.
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let dest = dst.join(entry.file_name());
         if entry.file_type()?.is_dir() {
+            let name = entry.file_name();
+            if matches!(name.to_string_lossy().as_ref(), ".gradle" | "build" | ".kotlin") {
+                continue;
+            }
             copy_dir_all(&entry.path(), &dest)?;
         } else {
             fs::copy(entry.path(), &dest)?;
@@ -292,6 +308,15 @@ fn run_add_project(
     queue.projects.push(project);
     let updated = queue.clone();
     save_queues(&app, &list)?;
+    let added = updated.projects.last().map(|p| p.name.clone()).unwrap_or_default();
+    crate::records::log_operation(
+        &app,
+        "config",
+        "add",
+        "添加项目",
+        "仅记录卡片，内容在记录操作时复制",
+        vec![added],
+    );
     Ok(updated)
 }
 
@@ -377,6 +402,20 @@ fn run_record_project(
         .cloned()
         .ok_or_else(|| "未找到配置队列".to_string())?;
     save_queues(app, &list)?;
+    let recorded = updated
+        .projects
+        .iter()
+        .find(|p| p.uuid == project_uuid)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
+    crate::records::log_operation(
+        app,
+        "config",
+        "modify",
+        "记录项目",
+        "项目内容已复制到配置区",
+        vec![recorded],
+    );
     Ok(updated)
 }
 
@@ -420,6 +459,15 @@ fn run_record_all_projects(
         .ok_or_else(|| "未找到配置队列".to_string())?;
     // Persist whatever was recorded successfully, then report the failure.
     save_queues(app, &list)?;
+    let names: Vec<String> = updated.projects.iter().map(|p| p.name.clone()).collect();
+    crate::records::log_operation(
+        app,
+        "config",
+        "modify",
+        "记录全部项目",
+        &format!("队列：{}", updated.name),
+        names,
+    );
     if let Some(e) = first_error {
         return Err(e);
     }
@@ -442,12 +490,26 @@ pub fn remove_config_project(
         .find(|q| q.uuid == queue_uuid)
         .ok_or_else(|| "未找到配置队列".to_string())?;
     let before = queue.projects.len();
+    let removed_name = queue
+        .projects
+        .iter()
+        .find(|p| p.uuid == project_uuid)
+        .map(|p| p.name.clone())
+        .unwrap_or_default();
     queue.projects.retain(|p| p.uuid != project_uuid);
     if queue.projects.len() == before {
         return Err("未找到要删除的项目".to_string());
     }
     let updated = queue.clone();
     save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "delete",
+        "移除项目卡片",
+        "仅移除卡片记录，磁盘文件不受影响",
+        vec![removed_name],
+    );
     Ok(updated)
 }
 
@@ -487,13 +549,13 @@ pub fn save_config_template(
         return Err("请选择配置模板".to_string());
     }
     let mut list = load_queues(&app)?;
-    let package_name = {
+    let (package_name, project_name) = {
         let project = find_project_mut(&mut list, &queue_uuid, &project_uuid)?;
         project.template_name = Some(template_name.clone());
         project.config_time = Some(config_time);
         // A new template means the copied code content is stale.
         project.code_copied = false;
-        project.package_name.clone()
+        (project.package_name.clone(), project.name.clone())
     };
     if let Some(package_name) = package_name.filter(|s| !s.is_empty()) {
         copy_parameter_file(&app, &template_name, &package_name)?;
@@ -504,6 +566,14 @@ pub fn save_config_template(
         .cloned()
         .ok_or_else(|| "未找到配置队列".to_string())?;
     save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "modify",
+        "保存配置模板",
+        &format!("模板：{template_name}"),
+        vec![project_name],
+    );
     Ok(updated)
 }
 
@@ -595,6 +665,14 @@ pub fn refresh_project_parameter(
         return Err(format!("模板「{template_name}」没有参数文件，无法更新"));
     }
     copy_parameter_file(&app, &template_name, &package_name)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "modify",
+        "从模板重置参数",
+        &format!("模板：{template_name}"),
+        vec![package_name],
+    );
     let path = parameter_path_of(&app, &project_uuid)?;
     fs::read_to_string(&path).map_err(|e| format!("读取参数文件失败：{e}"))
 }
@@ -613,7 +691,20 @@ pub fn write_project_parameter(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("无法创建参数目录：{e}"))?;
     }
-    fs::write(&path, content).map_err(|e| format!("保存参数文件失败：{e}"))
+    fs::write(&path, content).map_err(|e| format!("保存参数文件失败：{e}"))?;
+    let package = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    crate::records::log_operation(
+        &app,
+        "config",
+        "modify",
+        "保存参数",
+        &format!("包名：{package}"),
+        vec![package],
+    );
+    Ok(())
 }
 
 /// Launches a recorded project: copies the selected template's `code`
@@ -705,13 +796,22 @@ fn run_execute_project(app: &tauri::AppHandle, project_uuid: &str) -> Result<Str
 
     let code_success = results.iter().filter(|r| !r.skipped && r.success).count();
     let methods: usize = results.iter().map(|r| r.methods_generated).sum();
-    Ok(format!(
+    let summary = format!(
         "注入完成：参数写入 {} 项、复制文件 {} 个；代码任务成功 {} 个、生成方法 {} 个",
         report.written.len(),
         report.copied.len(),
         code_success,
         methods
-    ))
+    );
+    crate::records::log_operation(
+        app,
+        "config",
+        "modify",
+        "完善配置",
+        &summary,
+        vec![project.name.clone()],
+    );
+    Ok(summary)
 }
 
 /// Marks a sub project as configured (已配置) and records the start
@@ -726,20 +826,29 @@ pub fn start_config_project(
     let queue_uuid = queue_uuid.trim().to_string();
     let project_uuid = project_uuid.trim().to_string();
     let mut list = load_queues(&app)?;
-    {
+    let project_name = {
         let project = find_project_mut(&mut list, &queue_uuid, &project_uuid)?;
         if project.template_name.is_none() {
             return Err("该项目未选择配置模板，无法开始配置".to_string());
         }
         project.started = true;
         project.started_at = Some(started_at);
-    }
+        project.name.clone()
+    };
     let updated = list
         .iter()
         .find(|q| q.uuid == queue_uuid)
         .cloned()
         .ok_or_else(|| "未找到配置队列".to_string())?;
     save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "modify",
+        "开始配置",
+        "项目已标记为开始配置",
+        vec![project_name],
+    );
     Ok(updated)
 }
 
@@ -753,11 +862,25 @@ pub fn delete_config_queues(app: tauri::AppHandle, uuids: Vec<String>) -> Result
         return Ok(());
     }
     let mut list = load_queues(&app)?;
-    if !list.iter().any(|q| targets.contains(&q.uuid)) {
+    let removed_names: Vec<String> = list
+        .iter()
+        .filter(|q| targets.contains(&q.uuid))
+        .map(|q| q.name.clone())
+        .collect();
+    if removed_names.is_empty() {
         return Err("未找到要删除的队列".to_string());
     }
     list.retain(|q| !targets.contains(&q.uuid));
-    save_queues(&app, &list)
+    save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "delete",
+        "删除配置队列",
+        "队列内的项目记录一并删除，磁盘文件保留",
+        removed_names,
+    );
+    Ok(())
 }
 
 /// Updates a disk (non-imported) project's name and package name; the
@@ -817,14 +940,22 @@ pub fn update_config_project(
         }
         project.root_path = to.display().to_string();
     }
-    project.name = new_name;
-    project.package_name = Some(new_package_name);
+    project.name = new_name.clone();
+    project.package_name = Some(new_package_name.clone());
     let updated = list
         .iter()
         .find(|q| q.uuid == queue_uuid)
         .cloned()
         .ok_or_else(|| "未找到配置队列".to_string())?;
     save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "modify",
+        "修改项目信息",
+        &format!("包名：{new_package_name}"),
+        vec![new_name],
+    );
     Ok(updated)
 }
 
@@ -883,6 +1014,14 @@ fn run_reload_project(
         project.code_copied = false;
     }
     save_queues(app, &list)?;
+    crate::records::log_operation(
+        app,
+        "config",
+        "modify",
+        "重新在导入区加载",
+        "配置目录已用导入区内容重建",
+        vec![package_name],
+    );
     list.iter()
         .find(|q| q.uuid == queue_uuid)
         .cloned()
@@ -920,9 +1059,11 @@ fn run_delete_projects(
     // files) of the removed projects.
     let mut removed_paths: Vec<PathBuf> = Vec::new();
     let mut removed_packages: Vec<String> = Vec::new();
+    let mut removed_names: Vec<String> = Vec::new();
     for queue in list.iter_mut() {
         for project in queue.projects.iter().filter(|p| targets.contains(&p.uuid)) {
             removed_paths.push(PathBuf::from(project.root_path.clone()));
+            removed_names.push(project.name.clone());
             if let Some(package_name) = project.package_name.clone().filter(|s| !s.is_empty()) {
                 removed_packages.push(package_name);
             }
@@ -969,5 +1110,14 @@ fn run_delete_projects(
         }
     }
 
-    save_queues(&app, &list)
+    save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "delete",
+        "删除项目",
+        "配置目录与包名参数文件已一并清理",
+        removed_names,
+    );
+    Ok(())
 }

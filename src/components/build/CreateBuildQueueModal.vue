@@ -1,52 +1,47 @@
 <script setup lang="ts">
-import { Loader2, X } from "lucide-vue-next"
+import { RefreshCw, X } from "lucide-vue-next"
 import { ref } from "vue"
-import { addConfigProject, type ConfigQueue } from "@/lib/config"
+import AppSelect from "../AppSelect.vue"
 import { useShortcut } from "@/lib/shortcuts"
-
-const props = defineProps<{
-  queueUuid: string
-  /** Directory picked from the file manager. */
-  pickedPath: string
-}>()
+import { createBuildQueue, type BuildQueue } from "@/lib/build"
+import { generateUuid } from "@/lib/queues"
+import { formatNow } from "@/lib/templates"
 
 const emit = defineEmits<{
   close: []
-  saved: [queue: ConfigQueue, name: string]
+  saved: [queue: BuildQueue]
 }>()
 
 const name = ref("")
-const packageName = ref("")
+const uuid = ref(generateUuid())
+const queueType = ref("android")
+// Creation time is fixed when the modal opens.
+const createdAt = formatNow()
 const error = ref("")
 const saving = ref(false)
+
+// Builds currently support Android only.
+const typeOptions = [{ value: "android", label: "Android" }]
 
 // Closing and saving are driven by the central shortcut system.
 useShortcut("close", () => emit("close"))
 useShortcut("save", submit)
 
-// The entered name becomes the card name; the package name becomes a
-// folder under non-local-package/ receiving the picked directory's
-// contents, so the backend rejects duplicate package names.
 async function submit() {
   if (saving.value) return
   if (!name.value.trim()) {
-    error.value = "请输入配置名称"
-    return
-  }
-  if (!packageName.value.trim()) {
-    error.value = "请输入项目包名"
+    error.value = "请输入队列名称"
     return
   }
   error.value = ""
   saving.value = true
   try {
-    const queue = await addConfigProject(props.queueUuid, {
+    const queue = await createBuildQueue({
       name: name.value,
-      source: "disk",
-      packageName: packageName.value,
-      rootPath: props.pickedPath,
+      uuid: uuid.value,
+      queueType: queueType.value,
     })
-    emit("saved", queue, name.value.trim())
+    emit("saved", queue)
     emit("close")
   } catch (e) {
     error.value = typeof e === "string" ? e : "创建失败，请重试"
@@ -66,17 +61,17 @@ async function submit() {
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="create-disk-project-title"
+      aria-labelledby="create-build-queue-title"
       class="animate-modal-enter bg-card text-card-foreground relative flex w-[min(90%,460px)] flex-col rounded-2xl border border-border shadow-2xl shadow-black/[0.12] dark:shadow-black/[0.4]"
     >
       <header
         class="flex shrink-0 items-center justify-between border-b border-border px-[clamp(14px,2vw,18px)] py-[clamp(10px,1.6vh,14px)]"
       >
         <h2
-          id="create-disk-project-title"
+          id="create-build-queue-title"
           class="text-[clamp(12px,1.5vw,13px)] font-semibold"
         >
-          从磁盘中项目选择配置
+          创建构建队列
         </h2>
         <button
           type="button"
@@ -90,43 +85,62 @@ async function submit() {
       <div class="space-y-3 px-[clamp(14px,2vw,18px)] py-[clamp(12px,2vh,16px)]">
         <div class="space-y-1">
           <label
-            for="disk-project-name"
+            for="build-queue-name"
             class="text-muted-foreground block text-[clamp(10px,1.1vw,11px)]"
           >
-            配置名称
+            队列名称
           </label>
           <input
-            id="disk-project-name"
+            id="build-queue-name"
             v-model="name"
             type="text"
-            placeholder="请输入配置名称"
+            placeholder="请输入队列名称"
             class="bg-background focus-visible:ring-ring h-8 w-full rounded-lg border border-input px-3 text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none focus-visible:ring-2"
           />
         </div>
         <div class="space-y-1">
           <label
-            for="disk-project-package"
+            for="build-queue-uuid"
             class="text-muted-foreground block text-[clamp(10px,1.1vw,11px)]"
           >
-            项目包名（不能重复，用作复制目录名称）
+            队列编号
           </label>
-          <input
-            id="disk-project-package"
-            v-model="packageName"
-            type="text"
-            placeholder="请输入项目包名"
-            class="bg-background focus-visible:ring-ring h-8 w-full rounded-lg border border-input px-3 font-mono text-[clamp(10px,1.1vw,11px)] transition-colors focus-visible:outline-none focus-visible:ring-2"
+          <div class="flex items-center gap-2">
+            <input
+              id="build-queue-uuid"
+              v-model="uuid"
+              type="text"
+              readonly
+              aria-label="队列编号"
+              class="bg-muted/40 text-muted-foreground h-8 w-full rounded-lg border border-input px-3 font-mono text-[clamp(10px,1.1vw,11px)] focus-visible:outline-none"
+            />
+            <button
+              type="button"
+              class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
+              aria-label="重新生成队列编号"
+              title="重新生成"
+              @click="uuid = generateUuid()"
+            >
+              <RefreshCw class="size-3.5" />
+            </button>
+          </div>
+        </div>
+        <div class="space-y-1">
+          <span class="text-muted-foreground block text-[clamp(10px,1.1vw,11px)]">
+            队列类型
+          </span>
+          <AppSelect
+            v-model="queueType"
+            :options="typeOptions"
+            aria-label="队列类型"
           />
         </div>
         <div class="space-y-1">
           <span class="text-muted-foreground block text-[clamp(10px,1.1vw,11px)]">
-            所选目录
+            创建时间
           </span>
-          <p
-            class="bg-muted/40 text-muted-foreground flex h-8 items-center truncate rounded-lg border border-input px-3 font-mono text-[clamp(10px,1.1vw,11px)]"
-            :title="pickedPath"
-          >
-            {{ pickedPath }}
+          <p class="bg-muted/40 text-muted-foreground h-8 rounded-lg border border-input px-3 leading-8 text-[clamp(11px,1.25vw,12px)]">
+            {{ createdAt }}
           </p>
         </div>
         <p
@@ -149,12 +163,11 @@ async function submit() {
         </button>
         <button
           type="button"
-          class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 min-w-[80px] cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:opacity-50"
+          class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 min-w-[80px] cursor-pointer items-center justify-center rounded-lg px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:opacity-50"
           :disabled="saving"
           @click="submit"
         >
-          <Loader2 v-if="saving" class="size-3.5 animate-spin" />
-          {{ saving ? "创建中…" : "创建" }}
+          创建
         </button>
       </footer>
     </div>

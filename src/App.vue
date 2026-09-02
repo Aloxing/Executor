@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from "vue"
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue"
 import AppTitleBar from "./components/AppTitleBar.vue"
+import BuildView from "./components/build/BuildView.vue"
 import ConfigView from "./components/config/ConfigView.vue"
 import FloatingNavBar, { type NavKey } from "./components/FloatingNavBar.vue"
 import ImportView from "./components/import/ImportView.vue"
+import OutputView from "./components/output/OutputView.vue"
+import RecordsView from "./components/records/RecordsView.vue"
 import SettingsModal from "./components/SettingsModal.vue"
 import TemplatesView from "./components/templates/TemplatesView.vue"
 import ToastContainer from "./components/ToastContainer.vue"
 import { loadSettings, settings } from "./lib/settings"
+import { installShortcutDispatcher, registerShortcut } from "./lib/shortcuts"
 import { applyThemeMode } from "./lib/theme"
 import { ensureWorkspaceAreas } from "./lib/workspace"
 
@@ -24,6 +28,44 @@ const viewLabels: Record<NavKey, string> = {
 }
 const activeViewLabel = computed(() => viewLabels[activeView.value])
 
+// App-level shortcut handlers: the single global dispatcher plus the
+// navigation and open-settings actions. Page-level actions (save, close,
+// search, create) are registered by the views and overlays themselves.
+let disposeDispatcher: (() => void) | undefined
+const disposeRegistrations: (() => void)[] = []
+
+onMounted(() => {
+  disposeDispatcher = installShortcutDispatcher()
+  disposeRegistrations.push(
+    registerShortcut("settings", () => {
+      showSettings.value = true
+    }),
+    registerShortcut("nav.import", () => {
+      activeView.value = "import"
+    }),
+    registerShortcut("nav.config", () => {
+      activeView.value = "config"
+    }),
+    registerShortcut("nav.build", () => {
+      activeView.value = "build"
+    }),
+    registerShortcut("nav.output", () => {
+      activeView.value = "output"
+    }),
+    registerShortcut("nav.records", () => {
+      activeView.value = "records"
+    }),
+    registerShortcut("nav.templates", () => {
+      activeView.value = "templates"
+    })
+  )
+})
+
+onUnmounted(() => {
+  disposeDispatcher?.()
+  for (const off of disposeRegistrations) off()
+})
+
 // Implemented views are kept alive across switches so page state
 // (filters, inputs, expanded cards…) survives navigation.
 const viewComponent = computed(() => {
@@ -34,6 +76,12 @@ const viewComponent = computed(() => {
       return ImportView
     case "config":
       return ConfigView
+    case "build":
+      return BuildView
+    case "output":
+      return OutputView
+    case "records":
+      return RecordsView
     default:
       return null
   }

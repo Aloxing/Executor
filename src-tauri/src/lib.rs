@@ -1,8 +1,11 @@
 mod android_projects;
+mod builds;
 mod common;
 pub mod core;
 mod configs;
 mod imports;
+mod outputs;
+mod records;
 mod templates;
 mod workspace;
 
@@ -15,12 +18,19 @@ use core::window::{
     exit_app, hide_to_tray, mark_window_handled, restore_from_tray,
     setup_close_handling, ensure_window_shown, WindowHandledFlag,
 };
+use core::webview::disable_browser_accelerator_keys;
 use android_projects::{
     add_android_project, delete_android_project, delete_android_projects,
     detach_android_project, get_android_project_dir, import_android_project,
     import_android_projects, list_android_projects, reload_android_project,
     update_android_project,
 };
+use builds::{
+    add_build_project, create_build_queue, list_build_queues, remove_build_project,
+    run_project_build, stop_project_build, BuildRegistry,
+};
+use outputs::{copy_output_file, list_outputs, remove_output_file, remove_outputs};
+use records::{list_records, remove_record_item, remove_records};
 use configs::{
     add_config_project, create_config_queue, delete_config_projects, delete_config_queues,
     execute_config_project, list_config_queues, read_project_parameter,
@@ -91,6 +101,19 @@ pub fn run() {
             write_project_parameter,
             refresh_project_parameter,
             execute_config_project,
+            list_build_queues,
+            create_build_queue,
+            add_build_project,
+            remove_build_project,
+            run_project_build,
+            stop_project_build,
+            list_outputs,
+            remove_outputs,
+            remove_output_file,
+            copy_output_file,
+            list_records,
+            remove_records,
+            remove_record_item,
             ensure_workspace_areas
         ])
         .setup(move |app| {
@@ -103,10 +126,17 @@ pub fn run() {
             }
 
             app.manage(WindowHandledFlag(window_handled.clone()));
+            // Live build process ids, used by the stop-build action.
+            app.manage(BuildRegistry::default());
 
             // No tray icon at startup: it is created on demand when the
             // window is hidden to the tray.
             setup_close_handling(app)?;
+            // The app owns Ctrl+F / Ctrl+S etc. through its own shortcut
+            // system, so the WebView2 browser accelerators must be off.
+            if let Some(window) = app.get_webview_window("main") {
+                disable_browser_accelerator_keys(&window);
+            }
             ensure_window_shown(app, window_handled.clone());
 
             Ok(())

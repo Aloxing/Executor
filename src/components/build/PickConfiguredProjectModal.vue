@@ -1,50 +1,60 @@
 <script setup lang="ts">
-import { Loader2, Search, X } from "lucide-vue-next"
+import { Search, X } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
-import { listAndroidProjects, type AndroidProject } from "@/lib/android"
+import { listConfigQueues, type ConfigProject } from "@/lib/config"
+import type { ConfiguredPick } from "@/lib/build"
 
 const emit = defineEmits<{
   close: []
-  confirm: [projects: AndroidProject[]]
+  confirm: [picks: ConfiguredPick[]]
 }>()
 
 const keyword = ref("")
-const projects = ref<AndroidProject[]>([])
+const projects = ref<ConfigProject[]>([])
 const selected = ref<Set<string>>(new Set())
 const confirming = ref(false)
 
-// Only projects that finished importing can be configured from.
+// Only projects that finished the config flow (started, i.e. shown in the
+// config area's project directory) can be built from.
 onMounted(async () => {
-  const all = await listAndroidProjects()
-  projects.value = all.filter((p) => p.importStatus === "imported")
+  const queues = await listConfigQueues()
+  projects.value = queues.flatMap((queue) =>
+    queue.projects.filter((p) => p.started)
+  )
 })
 
 // Closing and confirming are driven by the central shortcut system.
 useShortcut("close", () => emit("close"))
 useShortcut("save", submit)
 
-// Search matches the app name and the package name, like the import page.
+// Search matches the project name and the package name.
 const filtered = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
   if (!kw) return projects.value
   return projects.value.filter(
     (p) =>
-      p.packageName.toLowerCase().includes(kw) ||
-      p.appName.toLowerCase().includes(kw)
+      p.name.toLowerCase().includes(kw) ||
+      (p.packageName ?? "").toLowerCase().includes(kw)
   )
 })
 
-function toggle(packageName: string) {
+function toggle(uuid: string) {
   const next = new Set(selected.value)
-  next.has(packageName) ? next.delete(packageName) : next.add(packageName)
+  next.has(uuid) ? next.delete(uuid) : next.add(uuid)
   selected.value = next
 }
 
 function submit() {
   if (confirming.value || !selected.value.size) return
   confirming.value = true
-  const picks = projects.value.filter((p) => selected.value.has(p.packageName))
+  const picks = projects.value
+    .filter((p) => selected.value.has(p.uuid))
+    .map((p) => ({
+      name: p.name,
+      packageName: p.packageName ?? "",
+      rootPath: p.rootPath,
+    }))
   emit("confirm", picks)
 }
 </script>
@@ -59,17 +69,17 @@ function submit() {
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="pick-imported-title"
+      aria-labelledby="pick-configured-title"
       class="animate-modal-enter bg-card text-card-foreground relative flex max-h-[min(86%,680px)] w-[min(90%,480px)] flex-col rounded-2xl border border-border shadow-2xl shadow-black/[0.12] dark:shadow-black/[0.4]"
     >
       <header
         class="flex shrink-0 items-center justify-between border-b border-border px-[clamp(14px,2vw,18px)] py-[clamp(10px,1.6vh,14px)]"
       >
         <h2
-          id="pick-imported-title"
+          id="pick-configured-title"
           class="text-[clamp(12px,1.5vw,13px)] font-semibold"
         >
-          从已导入的项目配置
+          从已完善配置的项目构建
         </h2>
         <button
           type="button"
@@ -102,19 +112,19 @@ function submit() {
             <X class="size-3" />
           </button>
         </div>
-        <!-- Scrollable directory of imported project cards -->
+        <!-- Scrollable directory of configured project cards -->
         <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5">
           <button
             v-for="project in filtered"
-            :key="project.packageName"
+            :key="project.uuid"
             type="button"
             class="flex w-full cursor-pointer select-none flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-all duration-300 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
             :class="
-              selected.has(project.packageName)
+              selected.has(project.uuid)
                 ? 'border-primary/40 bg-primary/[0.06]'
                 : 'border-border bg-muted/40 hover:bg-muted/60'
             "
-            @click="toggle(project.packageName)"
+            @click="toggle(project.uuid)"
           >
             <div class="flex items-center gap-2">
               <!-- Selection checkbox -->
@@ -122,13 +132,13 @@ function submit() {
                 aria-hidden="true"
                 class="flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-all duration-200 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
                 :class="
-                  selected.has(project.packageName)
+                  selected.has(project.uuid)
                     ? 'border-primary bg-primary'
                     : 'border-input bg-transparent'
                 "
               >
                 <svg
-                  v-if="selected.has(project.packageName)"
+                  v-if="selected.has(project.uuid)"
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
@@ -142,21 +152,24 @@ function submit() {
               </span>
               <p
                 class="min-w-0 flex-1 truncate text-[clamp(11px,1.2vw,12px)] font-semibold"
-                :title="project.appName"
+                :title="project.name"
               >
-                {{ project.appName }}
+                {{ project.name }}
               </p>
               <span
-                class="shrink-0 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[clamp(9px,1vw,10px)] font-medium text-emerald-600 dark:text-emerald-500"
+                v-if="project.templateName"
+                class="shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[clamp(9px,1vw,10px)] font-medium text-sky-600 dark:text-sky-500"
+                :title="`配置模板：${project.templateName}`"
               >
-                已导入
+                {{ project.templateName }}
               </span>
             </div>
             <p
               class="text-muted-foreground truncate pl-6 font-mono text-[clamp(9px,1vw,10px)]"
-              :title="project.packageName"
+              :title="project.rootPath"
             >
-              {{ project.packageName }}
+              {{ project.packageName ? `${project.packageName} · ` : ""
+              }}{{ project.rootPath }}
             </p>
           </button>
           <p
@@ -166,7 +179,7 @@ function submit() {
             {{
               projects.length
                 ? "未找到匹配的项目"
-                : "暂无已导入的项目，请先在导入区完成导入"
+                : "暂无已完善配置的项目，请先在配置区完成配置"
             }}
           </p>
         </div>
@@ -189,12 +202,11 @@ function submit() {
           </button>
           <button
             type="button"
-            class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 min-w-[80px] cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 min-w-[80px] cursor-pointer items-center justify-center rounded-lg px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="confirming || !selected.size"
             @click="submit"
           >
-            <Loader2 v-if="confirming" class="size-3.5 animate-spin" />
-            {{ confirming ? "添加中…" : "确定" }}
+            确定
           </button>
         </div>
       </footer>

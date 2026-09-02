@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue"
+import { onActivated, onMounted, ref, watch } from "vue"
 import { FolderOpen } from "lucide-vue-next"
 import SettingSection from "./SettingSection.vue"
 import SettingCard from "./SettingCard.vue"
@@ -12,6 +12,12 @@ const changing = ref(false)
 const choosingWorkspace = ref(false)
 
 onMounted(async () => {
+  dataDir.value = await getDataDir()
+})
+
+// Kept alive inside the settings modal; refresh the (cheap) data-dir read
+// whenever the tab becomes visible again.
+onActivated(async () => {
   dataDir.value = await getDataDir()
 })
 

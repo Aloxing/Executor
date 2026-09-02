@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FolderOpen, Loader2, MapPin, RefreshCw, X } from "lucide-vue-next"
-import { computed, onMounted, onUnmounted, ref } from "vue"
+import { computed, onMounted, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import {
   addAndroidProject,
   getAndroidProjectDir,
@@ -35,12 +36,11 @@ const error = ref("")
 const saving = ref(false)
 const reloading = ref(false)
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
+// Closing and saving are driven by the central shortcut system.
+useShortcut("close", () => emit("close"))
+useShortcut("save", submit)
 
 onMounted(async () => {
-  window.addEventListener("keydown", onKeydown)
   if (props.initial) {
     try {
       projectDir.value = await getAndroidProjectDir(props.initial.packageName)
@@ -48,10 +48,6 @@ onMounted(async () => {
       projectDir.value = ""
     }
   }
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
 })
 
 async function pickRootPath() {

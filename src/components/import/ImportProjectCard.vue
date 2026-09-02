@@ -14,6 +14,7 @@ const emit = defineEmits<{
   edit: []
   delete: []
   "toggle-select": []
+  contextmenu: [event: MouseEvent]
 }>()
 
 function onClick() {
@@ -49,6 +50,7 @@ const statusMeta = computed(() => {
         : 'border-transparent bg-muted/40 hover:border-border hover:bg-muted/60 hover:shadow-md hover:shadow-black/[0.06] dark:hover:shadow-black/[0.2]',
     ]"
     @click="onClick"
+    @contextmenu.prevent="emit('contextmenu', $event)"
   >
     <!-- Top-left: type badge + app name; right: status tag and actions -->
     <div class="flex items-center gap-2">

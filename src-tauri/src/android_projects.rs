@@ -133,6 +133,14 @@ pub fn add_android_project(
     // Track the package name inside the owning queue record.
     queue.packages.push(package_name);
     save_queues(&app, &queues)?;
+    crate::records::log_operation(
+        &app,
+        "import",
+        "add",
+        "添加项目",
+        &format!("包名：{}", project.package_name),
+        vec![project.app_name.clone()],
+    );
     Ok(project)
 }
 
@@ -230,6 +238,14 @@ fn run_update(
     projects[index].updated_at = updated_at.to_string();
     let updated = projects[index].clone();
     save_projects(app, &projects)?;
+    crate::records::log_operation(
+        app,
+        "import",
+        "modify",
+        "修改项目",
+        &format!("包名：{}", updated.package_name),
+        vec![updated.app_name.clone()],
+    );
     Ok(updated)
 }
 
@@ -262,6 +278,14 @@ fn run_reload(app: &tauri::AppHandle, package_name: &str) -> Result<AndroidProje
     projects[index].import_status = "imported".to_string();
     let updated = projects[index].clone();
     save_projects(app, &projects)?;
+    crate::records::log_operation(
+        app,
+        "import",
+        "modify",
+        "重新导入项目",
+        "已清空导入内容并从下载路径重新复制",
+        vec![updated.app_name.clone()],
+    );
     Ok(updated)
 }
 
@@ -316,8 +340,8 @@ pub fn delete_android_projects(
     // Explorer briefly holds a directory).
     let base = package_dir(&app)?;
     let mut failed: Vec<String> = Vec::new();
-    for name in removed {
-        let dir = base.join(&name);
+    for name in &removed {
+        let dir = base.join(name);
         if !dir.is_dir() {
             continue;
         }
@@ -328,6 +352,14 @@ pub fn delete_android_projects(
             }
         }
     }
+    crate::records::log_operation(
+        &app,
+        "import",
+        "delete",
+        "批量删除项目",
+        "记录与导入文件夹已删除",
+        removed,
+    );
     if !failed.is_empty() {
         return Err(format!(
             "记录已删除，但文件夹删除失败（可能被占用）：{}",
@@ -358,6 +390,14 @@ pub fn detach_android_project(app: tauri::AppHandle, package_name: String) -> Re
             save_queues(&app, &queues)?;
         }
     }
+    crate::records::log_operation(
+        &app,
+        "import",
+        "modify",
+        "从队列移除项目",
+        "记录与导入文件保留，仅解除队列关联",
+        vec![package_name],
+    );
     Ok(())
 }
 
@@ -380,6 +420,14 @@ pub fn delete_android_project(app: tauri::AppHandle, package_name: String) -> Re
         queue.packages.retain(|p| *p != package_name);
         save_queues(&app, &queues)?;
     }
+    crate::records::log_operation(
+        &app,
+        "import",
+        "delete",
+        "删除项目",
+        "记录与导入文件夹已删除",
+        vec![package_name.clone()],
+    );
 
     // Cleanup of the package folder (retry once in case a process such as
     // Explorer briefly holds the directory).
@@ -426,6 +474,10 @@ fn run_import(app: &tauri::AppHandle, queue_uuid: &str) -> Result<Vec<AndroidPro
     }
 
     let mut failed: Vec<String> = Vec::new();
+    let recorded: Vec<String> = indices
+        .iter()
+        .map(|&i| projects[i].package_name.clone())
+        .collect();
     for index in indices {
         let source = PathBuf::from(projects[index].root_path.trim());
         let package_name = projects[index].package_name.clone();
@@ -445,6 +497,14 @@ fn run_import(app: &tauri::AppHandle, queue_uuid: &str) -> Result<Vec<AndroidPro
     }
     save_projects(app, &projects)?;
 
+    crate::records::log_operation(
+        app,
+        "import",
+        "modify",
+        "记录全部项目",
+        "队列下的项目已复制到导入目录",
+        recorded,
+    );
     if !failed.is_empty() {
         return Err(format!("部分项目导入失败：{}", failed.join("、")));
     }
@@ -487,6 +547,14 @@ fn run_import_one(app: &tauri::AppHandle, package_name: &str) -> Result<AndroidP
         .map_err(|e| format!("导入项目「{package_name}」失败：{e}"))?;
     projects[index].import_status = "imported".to_string();
     save_projects(app, &projects)?;
+    crate::records::log_operation(
+        app,
+        "import",
+        "modify",
+        "记录项目",
+        "项目已复制到导入目录",
+        vec![package_name],
+    );
     Ok(projects[index].clone())
 }
 
@@ -508,12 +576,20 @@ fn clear_dir(dir: &Path) -> std::io::Result<()> {
 }
 
 /// Recursively copies the contents of `src` into `dst`.
+///
+/// Gradle-regenerated directories (`.gradle`, `build`, `.kotlin`) are
+/// skipped: they are locked while a build is running — which used to make
+/// the whole copy fail — and they are large, regenerable caches/artifacts.
 fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let dest = dst.join(entry.file_name());
         if entry.file_type()?.is_dir() {
+            let name = entry.file_name();
+            if matches!(name.to_string_lossy().as_ref(), ".gradle" | "build" | ".kotlin") {
+                continue;
+            }
             copy_dir_all(&entry.path(), &dest)?;
         } else {
             fs::copy(entry.path(), &dest)?;

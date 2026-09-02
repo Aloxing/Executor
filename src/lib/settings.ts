@@ -3,16 +3,28 @@ import { reactive } from "vue"
 export type CloseBehavior = "ask" | "tray" | "exit"
 export type ThemeMode = "dark" | "light" | "system"
 
+/** One Gradle installation directory (the executable lives in `bin`). */
+export interface GradleEnv {
+  name: string
+  path: string
+}
+
 export interface AppSettings {
   closeBehavior: CloseBehavior
   workspacePath: string
   themeMode: ThemeMode
+  gradleEnvs: GradleEnv[]
+  /** Customized shortcut combos per action id; defaults live in
+   * `lib/shortcuts.ts`. An empty string unbinds an action. */
+  shortcuts: Record<string, string>
 }
 
 const defaults: AppSettings = {
   closeBehavior: "ask",
   workspacePath: "",
   themeMode: "system",
+  gradleEnvs: [],
+  shortcuts: {},
 }
 
 export const settings = reactive<AppSettings>({ ...defaults })
@@ -34,6 +46,13 @@ export async function loadSettings(): Promise<void> {
       loaded.themeMode === "dark" || loaded.themeMode === "light"
         ? loaded.themeMode
         : "system"
+    settings.gradleEnvs = Array.isArray(loaded.gradleEnvs)
+      ? loaded.gradleEnvs.filter((env) => env && typeof env.path === "string")
+      : []
+    settings.shortcuts =
+      loaded.shortcuts && typeof loaded.shortcuts === "object"
+        ? { ...loaded.shortcuts }
+        : {}
   } catch {
     // Not running inside Tauri; keep defaults.
   }
@@ -46,6 +65,8 @@ export async function saveSettings(): Promise<void> {
         closeBehavior: settings.closeBehavior,
         workspacePath: settings.workspacePath,
         themeMode: settings.themeMode,
+        gradleEnvs: settings.gradleEnvs,
+        shortcuts: settings.shortcuts,
       },
     })
   } catch {

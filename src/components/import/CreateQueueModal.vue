@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { RefreshCw, X } from "lucide-vue-next"
-import { onMounted, onUnmounted, ref } from "vue"
+import { ref } from "vue"
 import AppSelect from "../AppSelect.vue"
+import { useShortcut } from "@/lib/shortcuts"
 import {
   createImportQueue,
   generateUuid,
@@ -24,17 +25,9 @@ const saving = ref(false)
 
 const typeOptions = [{ value: "android", label: "Android" }]
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+// Closing and saving are driven by the central shortcut system.
+useShortcut("close", () => emit("close"))
+useShortcut("save", submit)
 
 async function submit() {
   if (saving.value) return

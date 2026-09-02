@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { FolderDown, LayoutTemplate } from "lucide-vue-next"
-import { computed, onMounted, onUnmounted } from "vue"
+import { FolderDown, LayoutTemplate, MapPin } from "lucide-vue-next"
+import { computed } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import type { ConfigProject } from "@/lib/config"
 
 const props = defineProps<{
@@ -13,25 +14,17 @@ const emit = defineEmits<{
   close: []
   "pick-template": []
   record: []
+  locate: []
 }>()
 
-// Keep the menu inside the viewport (approximate menu size 220x90).
+// Keep the menu inside the viewport (approximate menu size 220x130).
 const position = computed(() => ({
   left: `${Math.max(4, Math.min(props.x, window.innerWidth - 230))}px`,
-  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 100))}px`,
+  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 140))}px`,
 }))
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+// Closing is driven by the central shortcut system (Esc by default).
+useShortcut("close", () => emit("close"))
 </script>
 
 <template>
@@ -64,6 +57,16 @@ onUnmounted(() => {
       >
         <FolderDown class="size-3.5 shrink-0" />
         记录项目
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="在资源管理器中打开项目目录"
+        @click="emit('locate')"
+      >
+        <MapPin class="size-3.5 shrink-0" />
+        定位项目
       </button>
     </div>
   </div>

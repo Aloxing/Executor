@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FolderDown, FolderOpen, PackageOpen, Trash2 } from "lucide-vue-next"
-import { computed, onMounted, onUnmounted } from "vue"
+import { computed } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import type { ConfigQueue } from "@/lib/config"
 
 const props = defineProps<{
@@ -23,17 +24,8 @@ const position = computed(() => ({
   top: `${Math.max(4, Math.min(props.y, window.innerHeight - 170))}px`,
 }))
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
-})
+// Closing is driven by the central shortcut system (Esc by default).
+useShortcut("close", () => emit("close"))
 </script>
 
 <template>

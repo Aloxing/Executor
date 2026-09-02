@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Calendar, CheckSquare, ListPlus, Search, Trash2, X } from "lucide-vue-next"
 import { computed, onMounted, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import CalendarPicker from "../import/CalendarPicker.vue"
 import ConfigDirectoryCard from "./ConfigDirectoryCard.vue"
 import ConfigProjectContextMenu from "./ConfigProjectContextMenu.vue"
@@ -27,6 +28,7 @@ import {
   type ConfigProject,
   type ConfigQueue,
 } from "@/lib/config"
+import { openInExplorer } from "@/lib/templates"
 import { showToast } from "@/lib/toast"
 
 const queues = ref<ConfigQueue[]>([])
@@ -53,6 +55,16 @@ function onPickDate(date: string) {
 
 // Create-queue modal state.
 const showCreate = ref(false)
+// Search input focused through the central search shortcut.
+const searchInput = ref<HTMLInputElement | null>(null)
+
+// Page-level shortcuts: primary create button and search focus.
+useShortcut("create", () => {
+  showCreate.value = true
+})
+useShortcut("search", () => {
+  searchInput.value?.focus()
+})
 // Right-click context menu state.
 const menu = ref<{ x: number; y: number; queue: ConfigQueue } | null>(null)
 // Queue currently receiving projects through the pick modal.
@@ -423,6 +435,19 @@ function onProjectContextMenu(
   projectMenu.value = { x: event.clientX, y: event.clientY, queue, project }
 }
 
+// Right-click on a project-directory card opens the same menu as the
+// queue sub cards; the owning queue is looked up by project uuid.
+function onDirectoryProjectContextMenu(
+  project: ConfigProject,
+  event: MouseEvent
+) {
+  const queue = queues.value.find((q) =>
+    q.projects.some((p) => p.uuid === project.uuid)
+  )
+  if (!queue) return
+  projectMenu.value = { x: event.clientX, y: event.clientY, queue, project }
+}
+
 function openSelectTemplate() {
   if (!projectMenu.value) return
   templateTarget.value = {
@@ -482,6 +507,22 @@ async function onRecordProject(queue: ConfigQueue, project: ConfigProject) {
   }
 }
 
+// Locate the project directory: recorded projects open their config copy,
+// unrecorded ones fall back to the source directory.
+async function onLocateProject(project: ConfigProject) {
+  projectMenu.value = null
+  const dir = project.rootPath || project.sourcePath || ""
+  if (!dir) {
+    showToast("该项目暂无可定位的目录")
+    return
+  }
+  try {
+    await openInExplorer(dir)
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "定位失败")
+  }
+}
+
 // 记录全部项目: record every project of the queue at once.
 async function onRecordAll() {
   if (!menu.value || addingUuid.value) return
@@ -517,6 +558,7 @@ async function onRecordAll() {
           class="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
         />
         <input
+          ref="searchInput"
           v-model="projectKeyword"
           type="text"
           placeholder="搜索项目，支持名称或包名"
@@ -701,6 +743,7 @@ async function onRecordAll() {
               @execute="onExecuteProject(project)"
               @delete="onDeleteDirectoryProject(project)"
               @toggle-select="toggleProject(project.uuid)"
+              @contextmenu="onDirectoryProjectContextMenu(project, $event)"
             />
           </template>
           <div v-else class="flex flex-1 items-center justify-center">
@@ -751,6 +794,7 @@ async function onRecordAll() {
       @close="projectMenu = null"
       @pick-template="openSelectTemplate"
       @record="onRecordProject(projectMenu.queue, projectMenu.project)"
+      @locate="onLocateProject(projectMenu.project)"
     />
     <SelectTemplateModal
       v-if="templateTarget"

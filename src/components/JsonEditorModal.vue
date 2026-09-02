@@ -6,6 +6,7 @@ import { oneDark } from "@codemirror/theme-one-dark"
 import { basicSetup } from "codemirror"
 import { X } from "lucide-vue-next"
 import { onMounted, onUnmounted, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 
 const props = defineProps<{
   title: string
@@ -23,17 +24,15 @@ const error = ref("")
 const containerRef = ref<HTMLDivElement | null>(null)
 let editor: EditorView | null = null
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
+// Closing and saving are driven by the central shortcut system.
+useShortcut("close", () => emit("close"))
+useShortcut("save", save)
 
 onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
   createEditor()
 })
 
 onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
   editor?.destroy()
   editor = null
 })

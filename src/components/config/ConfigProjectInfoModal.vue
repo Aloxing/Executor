@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { FolderOpen, Loader2, RefreshCw, X } from "lucide-vue-next"
-import { computed, onMounted, onUnmounted, ref } from "vue"
+import { computed, ref } from "vue"
+import { useShortcut } from "@/lib/shortcuts"
 import {
   reloadConfigProject,
   updateConfigProject,
@@ -31,16 +32,13 @@ const error = ref("")
 const saving = ref(false)
 const reloading = ref(false)
 
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === "Escape") emit("close")
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKeydown)
-})
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKeydown)
+// Closing and saving are driven by the central shortcut system; imported
+// projects are read-only, so ctrl+s declines and falls through.
+useShortcut("close", () => emit("close"))
+useShortcut("save", () => {
+  if (isImported.value) return false
+  save()
+  return true
 })
 
 async function save() {

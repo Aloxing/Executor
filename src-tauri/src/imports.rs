@@ -95,6 +95,14 @@ pub fn create_import_queue(
     };
     list.push(queue.clone());
     save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "import",
+        "add",
+        "创建导入队列",
+        &format!("类型：{}", queue.queue_type),
+        vec![queue.name.clone()],
+    );
     Ok(queue)
 }
 
@@ -113,6 +121,12 @@ pub fn delete_queues(app: tauri::AppHandle, uuids: Vec<String>) -> Result<(), St
         .iter()
         .filter(|q| targets.contains(&q.uuid))
         .map(|q| q.uuid.clone())
+        .collect();
+    // Names for the operation record (collected before the retain).
+    let removed_names: Vec<String> = list
+        .iter()
+        .filter(|q| targets.contains(&q.uuid))
+        .map(|q| q.name.clone())
         .collect();
     if removed.is_empty() {
         return Err("未找到要删除的队列".to_string());
@@ -133,5 +147,13 @@ pub fn delete_queues(app: tauri::AppHandle, uuids: Vec<String>) -> Result<(), St
     if changed {
         save_projects(&app, &projects)?;
     }
+    crate::records::log_operation(
+        &app,
+        "import",
+        "delete",
+        "删除导入队列",
+        "队列下的项目已保留并解除关联",
+        removed_names,
+    );
     Ok(())
 }
