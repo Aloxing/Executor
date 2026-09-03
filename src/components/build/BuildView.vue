@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { ListPlus, Loader2, Search, X } from "lucide-vue-next"
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
+import { FolderOpen, ListPlus, Loader2, Search, Smartphone, X } from "lucide-vue-next"
+import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from "vue"
 import AppSelect from "../AppSelect.vue"
 import ConfirmDialog from "../import/ConfirmDialog.vue"
+import BuildModeModal from "./BuildModeModal.vue"
 import BuildProjectContextMenu from "./BuildProjectContextMenu.vue"
 import BuildQueueCard from "./BuildQueueCard.vue"
 import BuildQueueContextMenu from "./BuildQueueContextMenu.vue"
 import CreateBuildQueueModal from "./CreateBuildQueueModal.vue"
+import DeviceLogModal from "./DeviceLogModal.vue"
 import PickConfiguredProjectModal from "./PickConfiguredProjectModal.vue"
 import {
   addBuildProject,
+  deleteBuildQueues,
+  getBuildLogsDir,
   listBuildQueues,
   listenBuildLog,
   removeBuildProject,
@@ -20,8 +24,18 @@ import {
   type BuildQueue,
   type ConfiguredPick,
 } from "@/lib/build"
+import {
+  deviceLogId,
+  listenDeviceLog,
+  listAndroidDevices,
+  startDeviceLogcat,
+  stopDeviceLogcat,
+  type AndroidDevice,
+  type DeviceLogEvent,
+} from "@/lib/devices"
 import { settings } from "@/lib/settings"
 import { useShortcut } from "@/lib/shortcuts"
+import { pendingBuildRequest } from "@/lib/pipeline"
 import { openInExplorer } from "@/lib/templates"
 import { showToast } from "@/lib/toast"
 
@@ -68,9 +82,16 @@ const pickQueue = ref<BuildQueue | null>(null)
 const pendingRemove = ref<{ queue: BuildQueue; project: BuildProject } | null>(null)
 const removing = ref(false)
 
-// Project/queue currently building (drives the loading indicators).
-const buildingUuid = ref("")
+// Projects currently building (parallel builds track several at once);
+// drives the per-card spinners and stop buttons.
+const buildingUuids = ref<Set<string>>(new Set())
+// Queue whose build-all is running.
 const queueBuildingUuid = ref("")
+// Queue waiting in the build-mode dialog (command + serial/parallel).
+const buildAllQueue = ref<BuildQueue | null>(null)
+// Queue waiting for its delete confirmation.
+const pendingDeleteQueue = ref<BuildQueue | null>(null)
+const deletingQueue = ref(false)
 // Set when the user stops a build-all run so the loop breaks early.
 const stopRequested = ref(false)
 
@@ -79,6 +100,9 @@ const stopRequested = ref(false)
 interface LogEntry {
   name: string
   lines: string[]
+  /** Lines matching the active filter; own cap, never flushed by the
+   * tail-only main buffer. */
+  filtered: string[]
   status: "" | "running" | "success" | "failed"
 }
 
@@ -93,22 +117,58 @@ const logFilter = ref("")
 /** Per-page line cap: older lines are released so a long build never
  * grows the DOM/memory without bound. */
 const MAX_LOG_LINES = 100
+// App-scoped device logs are much quieter than builds, so their pages
+// keep a deeper history.
+const DEVICE_MAX_LINES = 500
+// Filter matches accumulate in their own buffer (per log page), so a
+// long build can never flush them out of the tail-only main buffer.
+const FILTERED_MAX_LINES = 500
 
 function ensureLog(uuid: string, name: string) {
   if (!logs.value[uuid]) {
-    logs.value[uuid] = { name, lines: [], status: "" }
+    logs.value[uuid] = { name, lines: [], filtered: [], status: "" }
     logOrder.value.push(uuid)
   }
   logs.value[uuid].status = "running"
   activeLog.value = uuid
 }
 
+/** Appends the filter-matching lines to the entry's own buffer. */
+function collectFiltered(entry: LogEntry, lines: string[]) {
+  const kw = logFilter.value.trim().toLowerCase()
+  if (!kw) return
+  for (const line of lines) {
+    if (line.toLowerCase().includes(kw)) {
+      entry.filtered.push(line)
+    }
+  }
+  if (entry.filtered.length > FILTERED_MAX_LINES) {
+    entry.filtered.splice(0, entry.filtered.length - FILTERED_MAX_LINES)
+  }
+}
+
+// Changing the filter re-seeds every filtered buffer from the retained
+// tails; new matching lines keep accumulating from then on.
+watch(logFilter, () => {
+  const kw = logFilter.value.trim().toLowerCase()
+  for (const entry of Object.values(logs.value)) {
+    entry.filtered = kw
+      ? entry.lines.filter((line) => line.toLowerCase().includes(kw))
+      : []
+  }
+})
+
 // Removes a log page (tab); a running build must be stopped first.
+// Device pages stop their logcat capture and go straight away.
 function removeLog(uuid: string) {
-  const entry = logs.value[uuid]
-  if (entry?.status === "running") {
-    showToast("构建进行中，请先停止构建再移除日志")
-    return
+  if (uuid.startsWith("device:")) {
+    stopDeviceLogcat(uuid.slice("device:".length)).catch(() => {})
+  } else {
+    const entry = logs.value[uuid]
+    if (entry?.status === "running") {
+      showToast("构建进行中，请先停止构建再移除日志")
+      return
+    }
   }
   delete logs.value[uuid]
   logOrder.value = logOrder.value.filter((id) => id !== uuid)
@@ -118,12 +178,41 @@ function removeLog(uuid: string) {
 }
 
 async function scrollLogToBottom() {
+  // While the user has scrolled away from the bottom, new lines must not
+  // yank the view back; auto-follow resumes at the bottom edge.
+  if (!stickToBottom.value) return
   await nextTick()
   const el = logBodyRef.value
   if (el) el.scrollTop = el.scrollHeight
 }
 
+// True while the log body sits (near) its bottom edge.
+const stickToBottom = ref(true)
+
+function onLogScroll() {
+  const el = logBodyRef.value
+  if (!el) return
+  stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+}
+
+// Switching log pages always starts following the tail again.
+watch(activeLog, () => {
+  stickToBottom.value = true
+  scrollLogToBottom()
+})
+
 let unlistenLog: (() => void) | undefined
+let unlistenDeviceLog: (() => void) | undefined
+// True while the USB-device scan is running.
+const scanningDevices = ref(false)
+
+/** Splits one streamed chunk into lines; adb/cmd on Windows emit CRLF,
+ * and a stray trailing \r breaks both rendering and level detection. */
+function splitChunk(chunk: string): string[] {
+  return chunk.split("\n").map((line) =>
+    line.endsWith("\r") ? line.slice(0, -1) : line
+  )
+}
 
 function onBuildLog(event: BuildLogEvent) {
   const entry = logs.value[event.projectUuid]
@@ -132,23 +221,115 @@ function onBuildLog(event: BuildLogEvent) {
     entry.status = event.success ? "success" : "failed"
   } else {
     // The backend coalesces output into multi-line chunks.
-    entry.lines.push(...event.line.split("\n"))
+    const lines = splitChunk(event.line)
+    entry.lines.push(...lines)
     if (entry.lines.length > MAX_LOG_LINES) {
       entry.lines.splice(0, entry.lines.length - MAX_LOG_LINES)
     }
+    collectFiltered(entry, lines)
   }
   scrollLogToBottom()
 }
 
-// Visible lines of the active log after the prefix/keyword filter.
+// Device logcat chunks land in the device's own log page.
+function onDeviceLog(event: DeviceLogEvent) {
+  const entry = logs.value[deviceLogId(event.serial)]
+  if (!entry) return
+  if (event.kind === "done") {
+    entry.status = event.success ? "success" : "failed"
+  } else {
+    const lines = splitChunk(event.line)
+    entry.lines.push(...lines)
+    if (entry.lines.length > DEVICE_MAX_LINES) {
+      entry.lines.splice(0, entry.lines.length - DEVICE_MAX_LINES)
+    }
+    collectFiltered(entry, lines)
+  }
+  scrollLogToBottom()
+}
+
+// 设备日志: detect USB-debug devices first, then the modal picks which
+// devices to capture and whether to filter by an app package.
+const deviceModal = ref<AndroidDevice[] | null>(null)
+
+// Opens the persistent log-cache directory (build/logs): full histories
+// of every build and device capture, kept across restarts.
+async function onOpenLogsDir() {
+  try {
+    const dir = await getBuildLogsDir()
+    await openInExplorer(dir)
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "打开日志缓存目录失败")
+  }
+}
+
+async function onCaptureDevices() {
+  if (scanningDevices.value) return
+  scanningDevices.value = true
+  try {
+    const devices = await listAndroidDevices()
+    const online = devices.filter((d) => d.status === "device")
+    if (!online.length) {
+      showToast(
+        devices.length
+          ? "检测到设备但未授权或离线，请在手机上确认 USB 调试授权"
+          : "未检测到已开启 USB 调试的 Android 设备"
+      )
+      return
+    }
+    deviceModal.value = online
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "检测设备失败")
+  } finally {
+    scanningDevices.value = false
+  }
+}
+
+// Starts one capture page per selected device; with a package name the
+// backend attaches to the app process (waiting/re-attaching as needed).
+function onStartDeviceCapture(serials: string[], packageName: string) {
+  const devices = deviceModal.value ?? []
+  deviceModal.value = null
+  let started = 0
+  for (const serial of serials) {
+    const id = deviceLogId(serial)
+    if (logs.value[id]) {
+      activeLog.value = id
+      continue
+    }
+    const device = devices.find((d) => d.serial === serial)
+    logs.value[id] = {
+      name: `${device?.model || device?.product || "Android 设备"} · ${serial}${
+        packageName ? ` · ${packageName}` : ""
+      }`,
+      lines: [],
+      filtered: [],
+      status: "running",
+    }
+    logOrder.value.push(id)
+    activeLog.value = id
+    started++
+    // The capture stays pending until stopped; never awaited here.
+    startDeviceLogcat(serial, packageName).catch(() => {})
+  }
+  if (started) {
+    showToast(
+      packageName
+        ? `已开始抓取 ${started} 台设备上「${packageName}」的应用日志`
+        : `已开始抓取 ${started} 台设备的整机日志`,
+      "success"
+    )
+  }
+}
+
+// Visible lines of the active log: the dedicated filter buffer while a
+// filter is active (its matches are never flushed by incoming lines),
+// the full tail otherwise.
 const displayLines = computed(() => {
   if (!activeLog.value) return [] as string[]
   const entry = logs.value[activeLog.value]
   if (!entry) return [] as string[]
-  const kw = logFilter.value.trim().toLowerCase()
-  return kw
-    ? entry.lines.filter((line) => line.toLowerCase().includes(kw))
-    : entry.lines
+  return logFilter.value.trim() ? entry.filtered : entry.lines
 })
 
 async function reload() {
@@ -162,11 +343,32 @@ onMounted(async () => {
   } catch {
     // Not running inside Tauri.
   }
+  try {
+    unlistenDeviceLog = await listenDeviceLog(onDeviceLog)
+  } catch {
+    // Not running inside Tauri.
+  }
+})
+
+// KeepAlive 缓存页面：构建队列会被配置区（删项目/改名/记录）级联
+// 修改，每次切回时重新加载保持同步。
+onActivated(async () => {
+  await reload()
+  // Pipeline handoff: the config area forwarded a queue for building —
+  // open the build-mode dialog for it right away.
+  const uuid = pendingBuildRequest.value
+  if (uuid) {
+    pendingBuildRequest.value = null
+    const queue = queues.value.find((q) => q.uuid === uuid)
+    if (queue) buildAllQueue.value = queue
+  }
 })
 
 onUnmounted(() => {
   unlistenLog?.()
   unlistenLog = undefined
+  unlistenDeviceLog?.()
+  unlistenDeviceLog = undefined
 })
 
 function replaceQueue(updated: BuildQueue) {
@@ -302,15 +504,38 @@ async function onBuildProject(args: string[]) {
   if (!target) return
   projectMenu.value = null
   const env = requireGradleEnv()
-  if (!env || buildingUuid.value || queueBuildingUuid.value) return
-  ensureLog(target.project.uuid, target.project.name)
-  buildingUuid.value = target.project.uuid
+  if (!env || buildingUuids.value.size || queueBuildingUuid.value) return
+  await runQueueProject(env, target.project, args)
+}
+
+function markBuilding(uuid: string) {
+  const next = new Set(buildingUuids.value)
+  next.add(uuid)
+  buildingUuids.value = next
+}
+
+function unmarkBuilding(uuid: string) {
+  const next = new Set(buildingUuids.value)
+  next.delete(uuid)
+  buildingUuids.value = next
+}
+
+// One project's build inside any flow; its log streams into its own page.
+async function runQueueProject(
+  env: string,
+  project: BuildProject,
+  args: string[]
+) {
+  ensureLog(project.uuid, project.name)
+  markBuilding(project.uuid)
   try {
-    await runProjectBuild(target.project.uuid, env, args)
+    await runProjectBuild(project.uuid, env, args)
   } catch (e) {
-    showToast(typeof e === "string" ? e : "构建失败，请查看日志")
+    showToast(
+      typeof e === "string" ? e : `「${project.name}」构建失败，请查看日志`
+    )
   } finally {
-    buildingUuid.value = ""
+    unmarkBuilding(project.uuid)
   }
 }
 
@@ -330,33 +555,61 @@ async function onLocateProject() {
   }
 }
 
-// Build-all: the same flow for every project of the queue, one after
-// another; each project gets its own log page.
-async function onBuildAll(args: string[]) {
+// Delete a whole build queue; only the records go, project files stay.
+function openDeleteQueue() {
   if (!menu.value) return
-  const queue = menu.value.queue
+  pendingDeleteQueue.value = menu.value.queue
   menu.value = null
+}
+
+async function confirmDeleteQueue() {
+  const queue = pendingDeleteQueue.value
+  if (!queue || deletingQueue.value) return
+  deletingQueue.value = true
+  try {
+    await deleteBuildQueues([queue.uuid])
+    pendingDeleteQueue.value = null
+    await reload()
+    showToast(`已删除队列「${queue.name}」`, "success")
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "删除队列失败，请重试")
+  } finally {
+    deletingQueue.value = false
+  }
+}
+
+// 全部构建: the mode dialog picks the gradle command and whether the
+// queue builds serially (one after another) or in parallel (all at once).
+function openBuildAll() {
+  if (!menu.value) return
+  buildAllQueue.value = menu.value.queue
+  menu.value = null
+}
+
+async function startBuildAll(args: string[], mode: "serial" | "parallel") {
+  const queue = buildAllQueue.value
+  buildAllQueue.value = null
+  if (!queue) return
   if (!queue.projects.length) {
     showToast(`队列「${queue.name}」下暂无项目`)
     return
   }
   const env = requireGradleEnv()
-  if (!env || buildingUuid.value || queueBuildingUuid.value) return
+  if (!env || buildingUuids.value.size || queueBuildingUuid.value) return
   queueBuildingUuid.value = queue.uuid
   stopRequested.value = false
-  for (const project of queue.projects) {
-    if (stopRequested.value) {
-      showToast("已停止队列构建", "info")
-      break
-    }
-    ensureLog(project.uuid, project.name)
-    buildingUuid.value = project.uuid
-    try {
-      await runProjectBuild(project.uuid, env, args)
-    } catch (e) {
-      showToast(typeof e === "string" ? e : `「${project.name}」构建失败，请查看日志`)
-    } finally {
-      buildingUuid.value = ""
+  if (mode === "parallel") {
+    // Every project builds at the same time, each into its own log page.
+    await Promise.all(
+      queue.projects.map((project) => runQueueProject(env, project, args))
+    )
+  } else {
+    for (const project of queue.projects) {
+      if (stopRequested.value) {
+        showToast("已停止队列构建", "info")
+        break
+      }
+      await runQueueProject(env, project, args)
     }
   }
   queueBuildingUuid.value = ""
@@ -369,7 +622,8 @@ async function onBuildAll(args: string[]) {
 async function onStopProject(project: BuildProject) {
   const entry = logs.value[project.uuid]
   if (entry) {
-    entry.lines.push("== 已请求停止构建 ==")
+    const marker = "== 已请求停止构建 =="
+    entry.lines.push(marker)
     scrollLogToBottom()
   }
   if (queueBuildingUuid.value) stopRequested.value = true
@@ -390,7 +644,10 @@ async function onStopProject(project: BuildProject) {
     <div class="flex shrink-0 items-center gap-3">
       <!-- Left cluster: build type + gradle environment selectors -->
       <div class="flex items-center gap-2">
-        <span class="text-muted-foreground shrink-0 text-[clamp(11px,1.25vw,12px)]">
+        <span
+          class="text-muted-foreground shrink-0 text-[clamp(11px,1.25vw,12px)]"
+          title="构建产物的目标平台类型，当前仅支持 Android"
+        >
           构建类型
         </span>
         <div class="w-[clamp(100px,11vw,140px)]">
@@ -402,7 +659,10 @@ async function onStopProject(project: BuildProject) {
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <span class="text-muted-foreground shrink-0 text-[clamp(11px,1.25vw,12px)]">
+        <span
+          class="text-muted-foreground shrink-0 text-[clamp(11px,1.25vw,12px)]"
+          title="执行 gradle wrapper 所使用的 Gradle 版本，可在「设置 → 编译」中管理"
+        >
           Gradle 环境
         </span>
         <div v-if="gradleEnvOptions.length" class="w-[clamp(140px,15vw,200px)]">
@@ -451,7 +711,7 @@ async function onStopProject(project: BuildProject) {
               v-for="queue in queues"
               :key="queue.uuid"
               :queue="queue"
-              :building-uuid="buildingUuid"
+              :building-uuids="[...buildingUuids]"
               :building="queueBuildingUuid === queue.uuid"
               @delete-project="onDeleteProject(queue, $event)"
               @stop-project="onStopProject"
@@ -474,9 +734,31 @@ async function onStopProject(project: BuildProject) {
           class="flex shrink-0 items-center justify-between px-3 py-2"
         >
           <h2 class="text-[clamp(11px,1.3vw,13px)] font-semibold">构建日志</h2>
-          <span class="text-muted-foreground text-[clamp(9px,1vw,10px)]">
-            共 {{ logOrder.length }} 个
-          </span>
+          <div class="flex shrink-0 items-center gap-2">
+            <span class="text-muted-foreground text-[clamp(9px,1vw,10px)]">
+              共 {{ logOrder.length }} 个
+            </span>
+            <button
+              type="button"
+              class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex h-6 cursor-pointer items-center gap-1 rounded-md bg-muted/60 px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+              title="打开日志缓存目录（build/logs）：每次构建与设备抓取的完整日志文件，重启不丢失"
+              @click="onOpenLogsDir"
+            >
+              <FolderOpen class="size-2.5" />
+              日志缓存
+            </button>
+            <button
+              type="button"
+              class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex h-6 cursor-pointer items-center gap-1 rounded-md bg-muted/60 px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              title="检测已开启 USB 调试的 Android 设备，按设备分页抓取 logcat 日志"
+              :disabled="scanningDevices"
+              @click="onCaptureDevices"
+            >
+              <Loader2 v-if="scanningDevices" class="size-2.5 animate-spin" />
+              <Smartphone v-else class="size-2.5" />
+              设备日志
+            </button>
+          </div>
         </header>
         <!-- Log tabs: pick which project's log to view; the X removes a
              log page (blocked while its build is running) -->
@@ -498,6 +780,10 @@ async function onStopProject(project: BuildProject) {
             :aria-selected="activeLog === uuid"
             @click="activeLog = uuid"
           >
+            <Smartphone
+              v-if="uuid.startsWith('device:')"
+              class="text-muted-foreground size-2.5 shrink-0"
+            />
             <Loader2
               v-if="logs[uuid]?.status === 'running'"
               class="size-2.5 shrink-0 animate-spin"
@@ -535,7 +821,7 @@ async function onStopProject(project: BuildProject) {
           <input
             v-model="logFilter"
             type="text"
-            placeholder="筛选日志（包含匹配，如 Task / FAILURE）"
+            placeholder="筛选日志（包含匹配；命中单独缓存 500 条，不会被新日志刷掉）"
             class="bg-background focus-visible:ring-ring h-6 w-full rounded-md border border-input pr-6 pl-6 text-[clamp(9px,1vw,10px)] transition-colors focus-visible:outline-none focus-visible:ring-2"
           />
           <button
@@ -548,15 +834,22 @@ async function onStopProject(project: BuildProject) {
             <X class="size-2.5" />
           </button>
         </div>
-        <div ref="logBodyRef" class="min-h-0 flex-1 overflow-auto p-2">
+        <!-- Log body: plain themed text, no colors by design -->
+        <div
+          ref="logBodyRef"
+          class="min-h-0 flex-1 overflow-auto p-2"
+          @scroll="onLogScroll"
+        >
           <pre
             v-if="activeLog && logs[activeLog]"
-            class="text-muted-foreground font-mono text-[clamp(9px,1vw,10px]) leading-relaxed whitespace-pre-wrap break-all"
+            class="text-muted-foreground font-mono text-[clamp(9px,1vw,10px)] leading-relaxed whitespace-pre-wrap break-all"
             >{{ displayLines.join("\n") }}</pre
           >
           <div v-else class="flex h-full items-center justify-center">
-            <p class="text-muted-foreground text-center text-[clamp(10px,1.1vw,11px)]">
-              暂无构建日志，右键队列或项目卡片开始构建
+            <p
+              class="text-muted-foreground text-center text-[clamp(10px,1.1vw,11px)]"
+            >
+              暂无构建日志，右键队列或项目卡片开始构建，或点右上角「设备日志」抓取手机日志
             </p>
           </div>
         </div>
@@ -575,7 +868,20 @@ async function onStopProject(project: BuildProject) {
       @close="menu = null"
       @pick-config="openPickConfig"
       @pick-disk="pickFromDisk"
-      @build-all="onBuildAll"
+      @build-all-open="openBuildAll"
+      @delete-queue="openDeleteQueue"
+    />
+    <BuildModeModal
+      v-if="buildAllQueue"
+      :queue="buildAllQueue"
+      @close="buildAllQueue = null"
+      @start="startBuildAll"
+    />
+    <DeviceLogModal
+      v-if="deviceModal"
+      :devices="deviceModal"
+      @close="deviceModal = null"
+      @start="onStartDeviceCapture"
     />
     <BuildProjectContextMenu
       v-if="projectMenu"
@@ -598,6 +904,14 @@ async function onStopProject(project: BuildProject) {
       :busy="removing"
       @cancel="pendingRemove = null"
       @confirm="confirmRemove"
+    />
+    <ConfirmDialog
+      v-if="pendingDeleteQueue"
+      title="删除构建队列"
+      :message="`确定删除队列「${pendingDeleteQueue.name}」吗？仅删除队列与卡片记录，项目文件不受影响。`"
+      :busy="deletingQueue"
+      @cancel="pendingDeleteQueue = null"
+      @confirm="confirmDeleteQueue"
     />
   </div>
 </template>

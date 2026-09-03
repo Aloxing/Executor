@@ -34,7 +34,14 @@ const activeViewLabel = computed(() => viewLabels[activeView.value])
 let disposeDispatcher: (() => void) | undefined
 const disposeRegistrations: (() => void)[] = []
 
+// Pipeline navigation: any view can request a page switch (lib/nav.ts),
+// used by the import → config → build automation handoffs.
+const onAppNavigate = (event: Event) => {
+  activeView.value = (event as CustomEvent).detail as NavKey
+}
+
 onMounted(() => {
+  window.addEventListener("app-navigate", onAppNavigate)
   disposeDispatcher = installShortcutDispatcher()
   disposeRegistrations.push(
     registerShortcut("settings", () => {
@@ -62,6 +69,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener("app-navigate", onAppNavigate)
   disposeDispatcher?.()
   for (const off of disposeRegistrations) off()
 })

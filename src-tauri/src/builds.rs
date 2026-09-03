@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +16,110 @@ use crate::core::settings::read_settings;
 #[derive(Default)]
 pub struct BuildRegistry {
     pids: Mutex<HashMap<String, u32>>,
+}
+
+// ----------------------------------------------------------------------
+// Persistent log cache (`<workspace>/build/logs`)
+// ----------------------------------------------------------------------
+
+/// Cached log files kept before the oldest are pruned.
+const MAX_CACHED_LOGS: usize = 100;
+
+/// Every build / device-log session is also appended to
+/// `<workspace>/build/logs/<kind>-<id>-<timestamp>.log`, so full histories
+/// survive restarts while the in-app pages only keep their tail.
+pub(crate) struct LogCache {
+    file: Mutex<Option<fs::File>>,
+}
+
+impl LogCache {
+    /// Opens (or silently skips, logging must never fail a session) the
+    /// cache file of one session and prunes the oldest cached logs.
+    pub(crate) fn new(app: &tauri::AppHandle, kind: &str, id: &str) -> Arc<Self> {
+        let file = (|| -> Option<fs::File> {
+            let dir = logs_dir(app)?;
+            fs::create_dir_all(&dir).ok()?;
+            // Serials may contain characters illegal in file names.
+            let safe_id: String = id
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+            let path = dir.join(format!("{kind}-{safe_id}-{stamp}.log"));
+            fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .ok()
+        })();
+        if file.is_some() {
+            prune_old_logs(app);
+        }
+        Arc::new(Self {
+            file: Mutex::new(file),
+        })
+    }
+
+    /// Appends one line (or multi-line chunk) to the cache file.
+    pub(crate) fn write(&self, text: &str) {
+        let Ok(mut guard) = self.file.lock() else {
+            return;
+        };
+        let Some(file) = guard.as_mut() else {
+            return;
+        };
+        let _ = writeln!(file, "{text}");
+    }
+}
+
+fn logs_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let settings = read_settings(app);
+    let trimmed = settings.workspace_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed).join("build").join("logs"))
+}
+
+/// Keeps only the newest MAX_CACHED_LOGS files in the logs directory.
+fn prune_old_logs(app: &tauri::AppHandle) {
+    let Some(dir) = logs_dir(app) else { return };
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        files.push((modified, path));
+    }
+    if files.len() <= MAX_CACHED_LOGS {
+        return;
+    }
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in files.iter().skip(MAX_CACHED_LOGS) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+/// Path of the log-cache directory (created on demand) for opening it in
+/// the explorer from the build page.
+#[tauri::command]
+pub fn get_build_logs_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = logs_dir(&app)
+        .ok_or_else(|| "请先在「设置 → 存储」中选择工作空间路径".to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建日志缓存目录：{e}"))?;
+    Ok(dir.display().to_string())
 }
 
 /// One project attached to a build queue. Only the record is kept here
@@ -214,6 +318,37 @@ pub fn remove_build_project(
     Ok(updated)
 }
 
+/// Deletes build queues by uuid (single and batch share this command).
+/// Build queues only record project addresses, so nothing on disk is
+/// ever touched.
+#[tauri::command]
+pub fn delete_build_queues(app: tauri::AppHandle, uuids: Vec<String>) -> Result<(), String> {
+    let targets: HashSet<String> = uuids.iter().map(|u| u.trim().to_string()).collect();
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let mut list = load_queues(&app)?;
+    let removed_names: Vec<String> = list
+        .iter()
+        .filter(|q| targets.contains(&q.uuid))
+        .map(|q| q.name.clone())
+        .collect();
+    if removed_names.is_empty() {
+        return Err("未找到要删除的队列".to_string());
+    }
+    list.retain(|q| !targets.contains(&q.uuid));
+    save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "build",
+        "delete",
+        "删除构建队列",
+        "仅删除队列与卡片记录，项目文件不受影响",
+        removed_names,
+    );
+    Ok(())
+}
+
 // ----------------------------------------------------------------------
 // Build execution with streamed logs
 // ----------------------------------------------------------------------
@@ -306,70 +441,43 @@ fn run_build(
         ));
     };
 
-    emit_log(
-        app,
-        &project_uuid,
-        "status",
-        &format!("== 开始构建「{}」==", project.name),
-        None,
-    );
+    // Persistent cache: the full log lands in `build/logs/`, while the
+    // in-app page only keeps its tail.
+    let cache = LogCache::new(app, "build", &project_uuid);
+    let status = |line: &str| {
+        cache.write(line);
+        emit_log(app, &project_uuid, "status", line, None);
+    };
+
+    status(&format!("== 开始构建「{}」==", project.name));
 
     // Step 1: gradle wrapper with the selected environment.
-    emit_log(
-        app,
-        &project_uuid,
-        "status",
-        &format!("> \"{}\" wrapper", gradle_bin.display()),
-        None,
-    );
+    status(&format!("> \"{}\" wrapper", gradle_bin.display()));
     if let Err(e) = run_program(
         app,
         &project_uuid,
         &gradle_bin,
         &["wrapper".to_string()],
         &root,
+        &cache,
     ) {
-        emit_log(
-            app,
-            &project_uuid,
-            "status",
-            &format!("gradle wrapper 执行失败：{e}"),
-            None,
-        );
+        status(&format!("gradle wrapper 执行失败：{e}"));
         emit_log(app, &project_uuid, "done", "", Some(false));
         return Err(format!("gradle wrapper 执行失败：{e}"));
     }
-    emit_log(
-        app,
-        &project_uuid,
-        "status",
-        "gradle wrapper 执行成功，开始项目构建…",
-        None,
-    );
+    status("gradle wrapper 执行成功，开始项目构建…");
 
     // Step 2: gradlew <args> inside the project directory.
     let Some(gradlew) = resolve_executable(&root, "gradlew") else {
-        emit_log(
-            app,
-            &project_uuid,
-            "status",
-            &format!("项目根目录未找到 gradlew：{}", root.display()),
-            None,
-        );
+        status(&format!("项目根目录未找到 gradlew：{}", root.display()));
         emit_log(app, &project_uuid, "done", "", Some(false));
         return Err(format!("项目根目录未找到 gradlew：{}", root.display()));
     };
     let args = task_args.join(" ");
-    emit_log(
-        app,
-        &project_uuid,
-        "status",
-        &format!("> \"{}\" {args}", gradlew.display()),
-        None,
-    );
-    match run_program(app, &project_uuid, &gradlew, &task_args, &root) {
+    status(&format!("> \"{}\" {args}", gradlew.display()));
+    match run_program(app, &project_uuid, &gradlew, &task_args, &root, &cache) {
         Ok(()) => {
-            emit_log(app, &project_uuid, "status", "== 构建成功 ==", None);
+            status("== 构建成功 ==");
             crate::records::log_operation(
                 app,
                 "build",
@@ -381,33 +489,15 @@ fn run_build(
             // Record the artifacts in the output area (imported projects:
             // <package folder>/output; others: recursive apk scan).
             match crate::outputs::collect_build_outputs(app, &project) {
-                Ok(0) => emit_log(
-                    app,
-                    &project_uuid,
-                    "status",
-                    "未发现产出物（导入项目查找 output 目录，其它项目扫描 apk）",
-                    None,
-                ),
-                Ok(n) => emit_log(
-                    app,
-                    &project_uuid,
-                    "status",
-                    &format!("已记录 {n} 个产出物到产出区"),
-                    None,
-                ),
-                Err(e) => emit_log(
-                    app,
-                    &project_uuid,
-                    "status",
-                    &format!("产出物记录失败：{e}"),
-                    None,
-                ),
+                Ok(0) => status("未发现产出物（导入项目查找 output 目录，其它项目扫描 apk）"),
+                Ok(n) => status(&format!("已记录 {n} 个产出物到产出区")),
+                Err(e) => status(&format!("产出物记录失败：{e}")),
             }
             emit_log(app, &project_uuid, "done", "", Some(true));
             Ok(())
         }
         Err(e) => {
-            emit_log(app, &project_uuid, "status", &format!("构建失败：{e}"), None);
+            status(&format!("构建失败：{e}"));
             emit_log(app, &project_uuid, "done", "", Some(false));
             Err(format!("gradlew 执行失败：{e}"))
         }
@@ -441,6 +531,7 @@ fn run_program(
     program: &Path,
     args: &[String],
     cwd: &Path,
+    cache: &Arc<LogCache>,
 ) -> Result<(), String> {
     #[allow(unused_mut)]
     let mut cmd = Command::new(program);
@@ -465,7 +556,7 @@ fn run_program(
         pids.insert(project_uuid.to_string(), child.id());
     }
 
-    let result = stream_child(app, project_uuid, &mut child);
+    let result = stream_child(app, project_uuid, &mut child, cache);
 
     if let Ok(mut pids) = app.state::<BuildRegistry>().pids.lock() {
         pids.remove(project_uuid);
@@ -479,6 +570,7 @@ fn stream_child(
     app: &tauri::AppHandle,
     project_uuid: &str,
     child: &mut Child,
+    cache: &Arc<LogCache>,
 ) -> Result<(), String> {
     let stdout = child.stdout.take().ok_or_else(|| "无法读取命令输出".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "无法读取命令错误输出".to_string())?;
@@ -491,12 +583,13 @@ fn stream_child(
         let uuid = project_uuid.to_string();
         let buffer = buffer.clone();
         let flushing = flushing.clone();
+        let cache = cache.clone();
         std::thread::spawn(move || {
             while flushing.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(150));
-                flush_lines(&app, &uuid, &buffer);
+                flush_lines(&app, &uuid, &buffer, &cache);
             }
-            flush_lines(&app, &uuid, &buffer);
+            flush_lines(&app, &uuid, &buffer, &cache);
         })
     };
 
@@ -554,8 +647,14 @@ fn stream_child(
     }
 }
 
-/// Emits every buffered line as one `\n`-joined chunk event.
-fn flush_lines(app: &tauri::AppHandle, project_uuid: &str, buffer: &Mutex<Vec<String>>) {
+/// Emits every buffered line as one `\n`-joined chunk event, appending
+/// the same chunk to the session's persistent log cache.
+fn flush_lines(
+    app: &tauri::AppHandle,
+    project_uuid: &str,
+    buffer: &Mutex<Vec<String>>,
+    cache: &LogCache,
+) {
     let Ok(mut lines) = buffer.lock() else { return };
     if lines.is_empty() {
         return;
@@ -563,30 +662,36 @@ fn flush_lines(app: &tauri::AppHandle, project_uuid: &str, buffer: &Mutex<Vec<St
     let chunk = lines.join("\n");
     lines.clear();
     drop(lines);
+    cache.write(&chunk);
     emit_log(app, project_uuid, "stdout", &chunk, None);
 }
 
 /// Stops a running build by killing its whole process tree (the gradle
-/// launcher spawns java children that must not survive).
+/// launcher spawns java children that must not survive). Runs on the
+/// async thread pool so the tree kill never blocks the UI.
 #[tauri::command]
-pub fn stop_project_build(app: tauri::AppHandle, project_uuid: String) -> Result<(), String> {
-    let project_uuid = project_uuid.trim().to_string();
-    let pid = {
-        let registry = app.state::<BuildRegistry>();
-        let pids = registry
-            .pids
-            .lock()
-            .map_err(|_| "构建状态已失效".to_string())?;
-        pids.get(&project_uuid).copied()
-    };
-    let Some(pid) = pid else {
-        return Err("该项目当前没有正在进行的构建".to_string());
-    };
-    kill_process_tree(pid)
+pub async fn stop_project_build(app: tauri::AppHandle, project_uuid: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let project_uuid = project_uuid.trim().to_string();
+        let pid = {
+            let registry = app.state::<BuildRegistry>();
+            let pids = registry
+                .pids
+                .lock()
+                .map_err(|_| "构建状态已失效".to_string())?;
+            pids.get(&project_uuid).copied()
+        };
+        let Some(pid) = pid else {
+            return Err("该项目当前没有正在进行的构建".to_string());
+        };
+        kill_process_tree(pid)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(windows)]
-fn kill_process_tree(pid: u32) -> Result<(), String> {
+pub(crate) fn kill_process_tree(pid: u32) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let output = Command::new("taskkill")
@@ -605,6 +710,67 @@ fn kill_process_tree(pid: u32) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn kill_process_tree(_pid: u32) -> Result<(), String> {
+pub(crate) fn kill_process_tree(_pid: u32) -> Result<(), String> {
     Err("当前平台不支持停止构建".to_string())
+}
+
+// ----------------------------------------------------------------------
+// Cross-page synchronization helpers (config-area cascades)
+// ----------------------------------------------------------------------
+
+/// Re-points build cards from an old project directory to a new one and
+/// keeps the output records in sync; used when the config area renames a
+/// project folder (package rename) or moves it (record action).
+pub fn update_project_roots(app: &tauri::AppHandle, from: &str, to: &str) {
+    if from.is_empty() || to.is_empty() || from == to {
+        return;
+    }
+    if let Ok(mut list) = load_queues(app) {
+        let mut changed = false;
+        for queue in list.iter_mut() {
+            for project in queue.projects.iter_mut() {
+                if project.root_path == from {
+                    project.root_path = to.to_string();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            let _ = save_queues(app, &list);
+        }
+    }
+    crate::outputs::update_record_roots(app, from, to);
+}
+
+/// Drops build cards whose project directory was deleted (config-area
+/// cascade); the cards would only fail with「项目目录不存在」otherwise.
+pub fn drop_projects_by_roots(app: &tauri::AppHandle, roots: &[String]) {
+    if roots.is_empty() {
+        return;
+    }
+    let matches = |path: &str| roots.iter().any(|r| !r.is_empty() && path == r);
+    let Ok(mut list) = load_queues(app) else {
+        return;
+    };
+    let mut removed: Vec<String> = Vec::new();
+    let mut changed = false;
+    for queue in list.iter_mut() {
+        for project in queue.projects.iter().filter(|p| matches(&p.root_path)) {
+            removed.push(project.name.clone());
+        }
+        let before = queue.projects.len();
+        queue.projects.retain(|p| !matches(&p.root_path));
+        changed |= queue.projects.len() != before;
+    }
+    if changed {
+        let _ = save_queues(app, &list);
+        crate::records::log_operation(
+            app,
+            "build",
+            "delete",
+            "级联移除失效构建卡片",
+            "配置区已删除其引用的项目目录",
+            removed,
+        );
+    }
 }

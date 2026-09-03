@@ -149,6 +149,8 @@ pub fn update_template(
             fs::rename(&old_dir, base.join(&name))
                 .map_err(|e| format!("无法重命名模板文件夹：{e}"))?;
         }
+        // Config projects referencing the old name follow the rename.
+        crate::configs::rename_template_refs(&app, &original_name, &name);
     }
 
     let info = TemplateInfo {
@@ -184,12 +186,15 @@ pub fn delete_templates(app: tauri::AppHandle, names: Vec<String>) -> Result<(),
     }
     list.retain(|t| !targets.contains(&t.name));
     save_list(&app, &list)?;
+    // Config projects referencing the deleted templates fall back to
+    // 未选择模板 instead of failing on a dangling name later.
+    crate::configs::clear_template_refs(&app, &removed);
 
     // Cleanup of the on-disk template folders (retry once in case a
     // process such as Explorer briefly holds the directory).
     let base = templates_dir(&app)?;
     let mut failed: Vec<String> = Vec::new();
-    for name in removed {
+    for name in &removed {
         let dir = base.join(name);
         if !dir.is_dir() {
             continue;

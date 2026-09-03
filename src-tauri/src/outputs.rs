@@ -95,8 +95,17 @@ pub fn remove_outputs(app: tauri::AppHandle, uuids: Vec<String>) -> Result<(), S
         .filter(|r| targets.contains(&r.uuid))
         .map(|r| r.project_name.clone())
         .collect();
+    // Delete the artifact files first; a locked file keeps its record so
+    // the deletion can be retried instead of silently leaking the file.
+    let mut failed: Vec<String> = Vec::new();
     for record in list.iter().filter(|r| targets.contains(&r.uuid)) {
-        delete_files(&record.files);
+        failed.extend(delete_files(&record.files));
+    }
+    if !failed.is_empty() {
+        return Err(format!(
+            "部分产出文件被占用，未能删除（记录已保留，请重试）：{}",
+            failed.join("、")
+        ));
     }
     list.retain(|r| !targets.contains(&r.uuid));
     save_records(&app, &list)?;
@@ -130,10 +139,13 @@ pub fn remove_output_file(
         return Err("未找到要删除的产出文件".to_string());
     };
     let file_name = file.name.clone();
-    delete_files(&[OutputFile {
+    let failed = delete_files(&[OutputFile {
         name: String::new(),
         path: file_path.clone(),
     }]);
+    if !failed.is_empty() {
+        return Err("产出文件被占用，未能删除，请关闭占用程序后重试".to_string());
+    }
     record.files.retain(|f| f.path != file_path);
     if record.files.is_empty() {
         list.retain(|r| r.uuid != uuid);
@@ -151,43 +163,100 @@ pub fn remove_output_file(
 }
 
 /// Copies one artifact file to a destination chosen in the frontend.
+/// Runs on the async thread pool: artifacts can be large apk files whose
+/// copy would otherwise freeze the main thread.
 #[tauri::command]
-pub fn copy_output_file(app: tauri::AppHandle, src: String, dest: String) -> Result<(), String> {
-    let src = PathBuf::from(src.trim());
-    let dest = PathBuf::from(dest.trim());
-    if !src.is_file() {
-        return Err("产出文件不存在，可能已被移动或删除".to_string());
-    }
-    if dest.as_os_str().is_empty() {
-        return Err("请选择复制目标".to_string());
-    }
-    if let Some(dir) = dest.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("无法创建目标目录：{e}"))?;
-    }
-    fs::copy(&src, &dest).map_err(|e| format!("复制文件失败：{e}"))?;
-    let name = src
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    crate::records::log_operation(
-        &app,
-        "output",
-        "modify",
-        "复制产出文件",
-        &format!("目标：{}", dest.display()),
-        vec![name],
-    );
-    Ok(())
+pub async fn copy_output_file(app: tauri::AppHandle, src: String, dest: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = PathBuf::from(src.trim());
+        let dest = PathBuf::from(dest.trim());
+        if !src.is_file() {
+            return Err("产出文件不存在，可能已被移动或删除".to_string());
+        }
+        if dest.as_os_str().is_empty() {
+            return Err("请选择复制目标".to_string());
+        }
+        if let Some(dir) = dest.parent() {
+            fs::create_dir_all(dir).map_err(|e| format!("无法创建目标目录：{e}"))?;
+        }
+        fs::copy(&src, &dest).map_err(|e| format!("复制文件失败：{e}"))?;
+        let name = src
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        crate::records::log_operation(
+            &app,
+            "output",
+            "modify",
+            "复制产出文件",
+            &format!("目标：{}", dest.display()),
+            vec![name],
+        );
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-/// Deletes artifact files from disk; missing files are tolerated so stale
-/// records can always be cleaned up.
-fn delete_files(files: &[OutputFile]) {
+/// Deletes artifact files from disk and returns the paths that could not
+/// be removed; missing files count as already deleted.
+fn delete_files(files: &[OutputFile]) -> Vec<String> {
+    let mut failed = Vec::new();
     for file in files {
         let path = Path::new(file.path.trim());
-        if path.is_file() {
-            let _ = fs::remove_file(path);
+        if !path.is_file() {
+            continue;
         }
+        if fs::remove_file(path).is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if fs::remove_file(path).is_err() {
+                failed.push(file.path.clone());
+            }
+        }
+    }
+    failed
+}
+
+/// Drops output records whose project directory was deleted elsewhere
+/// (e.g. a config-area project removed together with its copied folder),
+/// so no stale cards pointing at vanished files are left behind.
+pub fn drop_records_by_roots(app: &tauri::AppHandle, roots: &[String]) {
+    if roots.is_empty() {
+        return;
+    }
+    let Ok(mut list) = load_records(app) else {
+        return;
+    };
+    let before = list.len();
+    list.retain(|r| {
+        !roots
+            .iter()
+            .any(|root| !root.is_empty() && r.root_path == *root)
+    });
+    if list.len() != before {
+        let _ = save_records(app, &list);
+    }
+}
+
+/// Re-points output records from an old project directory to a new one
+/// (the config area renamed or re-recorded the project folder), keeping
+/// the artifact cards and the overwrite matching of later builds valid.
+pub fn update_record_roots(app: &tauri::AppHandle, from: &str, to: &str) {
+    if from.is_empty() || to.is_empty() || from == to {
+        return;
+    }
+    let Ok(mut list) = load_records(app) else {
+        return;
+    };
+    let mut changed = false;
+    for record in list.iter_mut() {
+        if record.root_path == from {
+            record.root_path = to.to_string();
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = save_records(app, &list);
     }
 }
 

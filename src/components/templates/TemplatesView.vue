@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckSquare, Plus, Search, Trash2, X } from "lucide-vue-next"
-import { computed, onMounted, ref } from "vue"
+import { computed, onActivated, onMounted, ref } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
 import JsonEditorModal from "../JsonEditorModal.vue"
 import CreateTemplateModal from "./CreateTemplateModal.vue"
@@ -64,9 +64,13 @@ const allFilteredSelected = computed(
     filtered.value.every((t) => selected.value.has(t.name))
 )
 
-onMounted(async () => {
+async function reload() {
   templates.value = await listTemplates()
-})
+}
+
+onMounted(reload)
+// KeepAlive 缓存页面：每次切回时重新加载，保持与磁盘数据同步。
+onActivated(reload)
 
 function onSaved(info: TemplateInfo) {
   if (editing.value) {
@@ -317,11 +321,13 @@ function importParameterFromMenu() {
       <template v-else>
         <button
           type="button"
-          class="hover:bg-muted inline-flex h-8 shrink-0 cursor-pointer items-center rounded-lg bg-muted/60 px-3 text-[clamp(11px,1.25vw,12px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          class="hover:bg-muted inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-muted/60 px-3 text-[clamp(11px,1.25vw,12px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="!templates.length"
+          title="进入选择模式，批量删除模板"
           @click="enterSelectMode"
         >
-          管理
+          <Trash2 class="size-3.5" />
+          批量删除模板
         </button>
         <button
           type="button"

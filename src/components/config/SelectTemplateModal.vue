@@ -149,6 +149,7 @@ function submit(start: boolean) {
             type="button"
             class="hover:bg-muted inline-flex h-8 cursor-pointer items-center justify-center rounded-lg bg-muted/60 px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="saving || !selectedName"
+            title="仅保存模板与参数文件，暂不开始配置"
             @click="submit(false)"
           >
             仅保存
@@ -157,6 +158,7 @@ function submit(start: boolean) {
             type="button"
             class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 cursor-pointer items-center justify-center rounded-lg px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             :disabled="saving || !selectedName"
+            title="保存并标记开始配置，项目将显示到项目目录"
             @click="submit(true)"
           >
             保存并开始配置

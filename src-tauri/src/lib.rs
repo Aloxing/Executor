@@ -3,6 +3,7 @@ mod builds;
 mod common;
 pub mod core;
 mod configs;
+mod devices;
 mod imports;
 mod outputs;
 mod records;
@@ -26,10 +27,13 @@ use android_projects::{
     update_android_project,
 };
 use builds::{
-    add_build_project, create_build_queue, list_build_queues, remove_build_project,
-    run_project_build, stop_project_build, BuildRegistry,
+    add_build_project, create_build_queue, delete_build_queues, get_build_logs_dir,
+    list_build_queues, remove_build_project, run_project_build, stop_project_build, BuildRegistry,
 };
 use outputs::{copy_output_file, list_outputs, remove_output_file, remove_outputs};
+use devices::{
+    list_android_devices, start_device_logcat, stop_device_logcat, DeviceRegistry,
+};
 use records::{list_records, remove_record_item, remove_records};
 use configs::{
     add_config_project, create_config_queue, delete_config_projects, delete_config_queues,
@@ -105,12 +109,17 @@ pub fn run() {
             create_build_queue,
             add_build_project,
             remove_build_project,
+            delete_build_queues,
             run_project_build,
             stop_project_build,
+            get_build_logs_dir,
             list_outputs,
             remove_outputs,
             remove_output_file,
             copy_output_file,
+            list_android_devices,
+            start_device_logcat,
+            stop_device_logcat,
             list_records,
             remove_records,
             remove_record_item,
@@ -128,6 +137,8 @@ pub fn run() {
             app.manage(WindowHandledFlag(window_handled.clone()));
             // Live build process ids, used by the stop-build action.
             app.manage(BuildRegistry::default());
+            // Live adb logcat process ids, used by the device-log stop.
+            app.manage(DeviceRegistry::default());
 
             // No tray icon at startup: it is created on demand when the
             // window is hidden to the tray.

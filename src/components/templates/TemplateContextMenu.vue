@@ -65,7 +65,7 @@ useShortcut("close", () => emit("close"))
         @click="emit('open-dir')"
       >
         <FolderOpen class="size-3.5 shrink-0" />
-        在资源管理器内打开
+        打开模板目录
       </button>
     </div>
   </div>

@@ -325,6 +325,9 @@ fn run_add_project(
 /// into `config/package/<package name>/`, disk projects copy from the
 /// picked directory into `config/non-local-package/<package name>/`.
 fn record_project(app: &tauri::AppHandle, project: &mut ConfigProject) -> Result<(), String> {
+    // Build/output cards may already reference the old location; they
+    // must follow the move to the config copy.
+    let old_root = project.root_path.clone();
     let package_name = project
         .package_name
         .clone()
@@ -368,6 +371,7 @@ fn record_project(app: &tauri::AppHandle, project: &mut ConfigProject) -> Result
     // stale and the next launch must copy it again.
     project.code_copied = false;
     project.root_path = target.display().to_string();
+    crate::builds::update_project_roots(app, &old_root, &project.root_path);
     Ok(())
 }
 
@@ -938,6 +942,12 @@ pub fn update_config_project(
             fs::rename(&from, &to)
                 .map_err(|e| format!("重命名项目文件夹失败：{e}"))?;
         }
+        // Build/output cards referencing the old folder follow the rename.
+        crate::builds::update_project_roots(
+            &app,
+            &from.display().to_string(),
+            &to.display().to_string(),
+        );
         project.root_path = to.display().to_string();
     }
     project.name = new_name.clone();
@@ -1080,14 +1090,28 @@ fn run_delete_projects(
         .flat_map(|q| q.projects.iter().map(|p| PathBuf::from(p.root_path.clone())))
         .collect();
     let config = config_dir(&app)?;
-    for path in removed_paths {
-        if kept.contains(&path) || !path.starts_with(&config) {
+    // Directories actually removed; used to drop stale output records.
+    let mut deleted_dirs: Vec<String> = Vec::new();
+    // Locked folders/files are reported at the end instead of aborting:
+    // rolling back mid-way would leave records pointing at directories
+    // that were already deleted.
+    let mut failed: Vec<String> = Vec::new();
+    for path in &removed_paths {
+        if kept.contains(path) || !path.starts_with(&config) {
             continue;
         }
         if path.is_dir() {
-            fs::remove_dir_all(&path)
-                .map_err(|e| format!("无法删除配置目录 {}：{e}", path.display()))?;
+            // Retry once in case a process such as Explorer briefly
+            // holds the directory.
+            if fs::remove_dir_all(path).is_err() {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                if fs::remove_dir_all(path).is_err() {
+                    failed.push(path.display().to_string());
+                    continue;
+                }
+            }
         }
+        deleted_dirs.push(path.to_string_lossy().to_string());
     }
 
     // Also drop the package-named parameter JSON, unless a remaining
@@ -1104,13 +1128,22 @@ fn run_delete_projects(
             continue;
         }
         let json_path = parameter_dir.join(format!("{package_name}.json"));
-        if json_path.is_file() {
-            fs::remove_file(&json_path)
-                .map_err(|e| format!("无法删除参数文件 {}：{e}", json_path.display()))?;
+        if json_path.is_file() && fs::remove_file(&json_path).is_err() {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if fs::remove_file(&json_path).is_err() {
+                failed.push(json_path.display().to_string());
+            }
         }
     }
 
+    // The records always go (cards disappear, no zombies pointing at
+    // deleted folders); leftovers are reported for a manual cleanup.
     save_queues(&app, &list)?;
+    // The removed project folders took their build artifacts with them:
+    // drop the output-area records pointing at those directories, and the
+    // build cards that can never run again.
+    crate::outputs::drop_records_by_roots(&app, &deleted_dirs);
+    crate::builds::drop_projects_by_roots(&app, &deleted_dirs);
     crate::records::log_operation(
         &app,
         "config",
@@ -1119,5 +1152,170 @@ fn run_delete_projects(
         "配置目录与包名参数文件已一并清理",
         removed_names,
     );
+    if !failed.is_empty() {
+        return Err(format!(
+            "项目记录已删除，但以下内容删除失败（可能被占用）：{}",
+            failed.join("、")
+        ));
+    }
     Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Cross-page synchronization helpers (import / templates area cascades)
+// ----------------------------------------------------------------------
+
+/// Import-area cascade: imported projects were deleted. Unrecorded config
+/// cards lose their data source (`import/package/<pkg>` is gone) and are
+/// dropped; recorded cards keep their own copy and stay untouched.
+pub fn drop_unrecorded_by_packages(app: &tauri::AppHandle, packages: &[String]) {
+    if packages.is_empty() {
+        return;
+    }
+    let stale = |p: &ConfigProject| {
+        p.source == "imported"
+            && !p.recorded
+            && p.package_name
+                .as_deref()
+                .map(|n| packages.iter().any(|t| t == n))
+                .unwrap_or(false)
+    };
+    let Ok(mut list) = load_queues(app) else {
+        return;
+    };
+    let mut removed: Vec<String> = Vec::new();
+    let mut changed = false;
+    for queue in list.iter_mut() {
+        for project in queue.projects.iter().filter(|p| stale(p)) {
+            removed.push(project.name.clone());
+        }
+        let before = queue.projects.len();
+        queue.projects.retain(|p| !stale(p));
+        changed |= queue.projects.len() != before;
+    }
+    if changed {
+        let _ = save_queues(app, &list);
+        crate::records::log_operation(
+            app,
+            "config",
+            "delete",
+            "级联清理失效项目卡片",
+            "导入区项目已删除，未记录卡片失去数据来源",
+            removed,
+        );
+    }
+}
+
+/// Import-area cascade: a package was renamed. Unrecorded imported cards
+/// are re-pointed at the renamed import folder so 记录/完善配置 keep
+/// working; recorded cards are decoupled (they own their copy).
+pub fn sync_import_rename(app: &tauri::AppHandle, old_pkg: &str, new_pkg: &str) {
+    if old_pkg.is_empty() || new_pkg.is_empty() || old_pkg == new_pkg {
+        return;
+    }
+    let (Ok(mut list), Ok(ws)) = (load_queues(app), workspace_dir(app)) else {
+        return;
+    };
+    let dir_str = ws
+        .join("import")
+        .join("package")
+        .join(new_pkg)
+        .display()
+        .to_string();
+    let mut touched: Vec<String> = Vec::new();
+    let mut changed = false;
+    for queue in list.iter_mut() {
+        for project in queue.projects.iter_mut() {
+            if project.source == "imported"
+                && !project.recorded
+                && project.package_name.as_deref() == Some(old_pkg)
+            {
+                project.root_path = dir_str.clone();
+                project.source_path = dir_str.clone();
+                project.package_name = Some(new_pkg.to_string());
+                touched.push(project.name.clone());
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        let _ = save_queues(app, &list);
+        crate::records::log_operation(
+            app,
+            "config",
+            "modify",
+            "同步导入区包名修改",
+            &format!("包名：{old_pkg} → {new_pkg}"),
+            touched,
+        );
+    }
+}
+
+/// Templates-area cascade: templates were deleted. Referencing projects
+/// fall back to 未选择模板 so 完善配置/参数重置 close their entries
+/// instead of failing on a dangling name.
+pub fn clear_template_refs(app: &tauri::AppHandle, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let Ok(mut list) = load_queues(app) else {
+        return;
+    };
+    let mut touched: Vec<String> = Vec::new();
+    let mut changed = false;
+    for queue in list.iter_mut() {
+        for project in queue.projects.iter_mut() {
+            if let Some(template) = project.template_name.as_deref() {
+                if names.iter().any(|n| n == template) {
+                    project.template_name = None;
+                    touched.push(project.name.clone());
+                    changed = true;
+                }
+            }
+        }
+    }
+    if changed {
+        let _ = save_queues(app, &list);
+        crate::records::log_operation(
+            app,
+            "config",
+            "modify",
+            "模板删除级联",
+            "引用该模板的项目已清空模板选择",
+            touched,
+        );
+    }
+}
+
+/// Templates-area cascade: a template was renamed; keep the name
+/// references of config projects valid.
+pub fn rename_template_refs(app: &tauri::AppHandle, from: &str, to: &str) {
+    if from.is_empty() || to.is_empty() || from == to {
+        return;
+    }
+    let Ok(mut list) = load_queues(app) else {
+        return;
+    };
+    let mut touched: Vec<String> = Vec::new();
+    let mut changed = false;
+    for queue in list.iter_mut() {
+        for project in queue.projects.iter_mut() {
+            if project.template_name.as_deref() == Some(from) {
+                project.template_name = Some(to.to_string());
+                touched.push(project.name.clone());
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        let _ = save_queues(app, &list);
+        crate::records::log_operation(
+            app,
+            "config",
+            "modify",
+            "模板改名级联",
+            &format!("模板：{from} → {to}"),
+            touched,
+        );
+    }
 }

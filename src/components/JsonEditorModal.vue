@@ -137,6 +137,7 @@ function save() {
         <button
           type="button"
           class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-8 min-w-[80px] cursor-pointer items-center justify-center rounded-lg px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+          title="校验 JSON 格式后保存"
           @click="save"
         >
           保存

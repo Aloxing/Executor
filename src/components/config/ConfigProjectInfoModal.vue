@@ -195,7 +195,7 @@ async function locate() {
               class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg bg-muted/60 transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="reloading"
               aria-label="重新在导入区加载"
-              title="重新在导入区加载"
+              title="清空配置目录并从导入区重新复制（仅导入项目）"
               @click="reload"
             >
               <Loader2 v-if="reloading" class="size-3.5 animate-spin" />

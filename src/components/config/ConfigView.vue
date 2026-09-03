@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Calendar, CheckSquare, ListPlus, Search, Trash2, X } from "lucide-vue-next"
-import { computed, onMounted, ref } from "vue"
+import { computed, onActivated, onMounted, ref } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
 import CalendarPicker from "../import/CalendarPicker.vue"
 import ConfigDirectoryCard from "./ConfigDirectoryCard.vue"
@@ -14,6 +14,10 @@ import PickImportedProjectModal from "./PickImportedProjectModal.vue"
 import SelectTemplateModal from "./SelectTemplateModal.vue"
 import ConfirmDialog from "../import/ConfirmDialog.vue"
 import type { AndroidProject } from "@/lib/android"
+import { addBuildProject, createBuildQueue, listBuildQueues } from "@/lib/build"
+import { generateUuid } from "@/lib/queues"
+import { navigateTo } from "@/lib/nav"
+import { pendingBuildRequest } from "@/lib/pipeline"
 import {
   addConfigProject,
   deleteConfigProjects,
@@ -22,6 +26,7 @@ import {
   listConfigQueues,
   recordAllConfigProjects,
   recordConfigProject,
+  reloadConfigProject,
   removeConfigProject,
   saveConfigTemplate,
   startConfigProject,
@@ -153,6 +158,9 @@ async function reload() {
 }
 
 onMounted(reload)
+// KeepAlive 缓存页面：配置队列会被导入区（删项目/改包名）与模板区
+// （删除/改名）级联修改，每次切回时重新加载保持同步。
+onActivated(reload)
 
 function replaceQueue(updated: ConfigQueue) {
   queues.value = queues.value.map((q) =>
@@ -326,7 +334,7 @@ function requestBatchDelete() {
     if (!uuids.length) return
     confirm.value = {
       title: "批量删除项目",
-      message: `确定删除所选 ${uuids.length} 个项目吗？对应的配置目录也会一并删除，删除后不可恢复。`,
+      message: `确定删除所选 ${uuids.length} 个项目吗？配置区复制目录与包名参数文件将一并清理（导入区与磁盘源文件不受影响），删除后不可恢复。`,
       run: async () => {
         await deleteConfigProjects(uuids)
         exitSelectMode()
@@ -355,7 +363,7 @@ async function runConfirm() {
 function onDeleteDirectoryProject(project: ConfigProject) {
   confirm.value = {
     title: "删除项目",
-    message: `确定删除项目「${project.name}」吗？对应的配置目录也会一并删除，删除后不可恢复。`,
+    message: `确定删除项目「${project.name}」吗？配置区复制目录与包名参数文件将一并清理（导入区与磁盘源文件不受影响），删除后不可恢复。`,
     run: async () => {
       await deleteConfigProjects([project.uuid])
       await reload()
@@ -457,9 +465,114 @@ function openSelectTemplate() {
   projectMenu.value = null
 }
 
+// --- 自动化流水线第二步：批量模板配置 → 转构建区 -------------------------
+
+// Queue receiving the batch template flow; the shared SelectTemplateModal
+// switches to batch mode while it is set.
+const batchTemplateQueue = ref<ConfigQueue | null>(null)
+const batchRunning = ref(false)
+
+function openBatchTemplate() {
+  if (!menu.value) return
+  batchTemplateQueue.value = menu.value.queue
+  menu.value = null
+}
+
+// Applies one template to every project of the queue: 保存模板 →
+// 开始配置 → 完善配置（内核注入）. Single failures never stop the run;
+// the successful projects are then forwarded to the build area.
+async function runBatchTemplate(templateName: string, start: boolean) {
+  const queue = batchTemplateQueue.value
+  if (!queue || batchRunning.value) return
+  batchRunning.value = true
+  addingUuid.value = queue.uuid
+  const failed: string[] = []
+  let done = 0
+  try {
+    for (const project of queue.projects) {
+      try {
+        await saveConfigTemplate(queue.uuid, project.uuid, templateName)
+        if (start) {
+          await startConfigProject(queue.uuid, project.uuid)
+          await executeConfigProject(project.uuid)
+        }
+        done++
+      } catch (e) {
+        failed.push(
+          `${project.name}（${typeof e === "string" ? e : "未知错误"}）`
+        )
+      }
+    }
+    await reload()
+    batchTemplateQueue.value = null
+    showToast(
+      `批量配置完成：成功 ${done} 个${
+        failed.length ? `，失败 ${failed.length} 个（${failed.join("；")}）` : ""
+      }`,
+      failed.length ? "info" : "success"
+    )
+    // Full pipeline: configured projects continue to the build area.
+    if (start && done) await transferToBuild(queue.name)
+  } finally {
+    batchRunning.value = false
+    addingUuid.value = ""
+  }
+}
+
+// 自动化流水线第三步：把配置完成的队列转入同名构建队列（复用已存在
+// 的，按地址去重补齐），然后交给构建页选择编译命令与串行/并行方式。
+async function transferToBuild(configQueueName: string) {
+  try {
+    const fresh = (await listConfigQueues()).find(
+      (q) => q.name === configQueueName
+    )
+    if (!fresh) return
+    const picks = fresh.projects.filter((p) => p.started)
+    if (!picks.length) return
+    const buildQueues = await listBuildQueues()
+    let target = buildQueues.find((q) => q.name === fresh.name)
+    if (!target) {
+      target = await createBuildQueue({
+        name: fresh.name,
+        uuid: generateUuid(),
+        queueType: fresh.queueType,
+      })
+    }
+    const existing = new Set(target.projects.map((p) => p.rootPath))
+    let added = 0
+    for (const p of picks) {
+      if (existing.has(p.rootPath)) continue
+      try {
+        target = await addBuildProject(target.uuid, {
+          name: p.name,
+          source: "config",
+          packageName: p.packageName ?? undefined,
+          rootPath: p.rootPath,
+        })
+        added++
+      } catch {
+        // Backend rejected (duplicate address etc.) — keep going.
+      }
+    }
+    pendingBuildRequest.value = target.uuid
+    navigateTo("build")
+    showToast(
+      `已转入构建区：新增 ${added} 个，队列共 ${target.projects.length} 个项目，请选择编译方式`,
+      "success"
+    )
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "转入构建区失败，请重试")
+  }
+}
+
 // 选择配置模板后开始配置: save the template (recording the modify-config
 // time) and optionally start the configuration right away.
 async function onTemplateSave(templateName: string, start: boolean) {
+  // Batch mode: one template for the whole queue (automation pipeline).
+  if (batchTemplateQueue.value) {
+    await runBatchTemplate(templateName, start)
+    return
+  }
   const target = templateTarget.value
   if (!target || savingTemplate.value) return
   savingTemplate.value = true
@@ -520,6 +633,22 @@ async function onLocateProject(project: ConfigProject) {
     await openInExplorer(dir)
   } catch (e) {
     showToast(typeof e === "string" ? e : "定位失败")
+  }
+}
+
+// 重载项目（保留参数）: rebuild the config copy of a recorded imported
+// project from the import area; the parameter JSON (stored separately
+// under config/parameter/) and the template selection stay untouched.
+function onReloadProject(queue: ConfigQueue, project: ConfigProject) {
+  projectMenu.value = null
+  confirm.value = {
+    title: "重载项目（保留参数）",
+    message: `确定重载项目「${project.name}」吗？配置目录下已复制的项目文件将被删除并从导入区重新复制；参数 JSON 与模板选择保留，模板代码将在下次启动时重新复制。`,
+    run: async () => {
+      const updated = await reloadConfigProject(queue.uuid, project.uuid)
+      replaceQueue(updated)
+      showToast(`项目「${project.name}」已重新在导入区加载`, "success")
+    },
   }
 }
 
@@ -772,6 +901,7 @@ async function onRecordAll() {
       @pick-imported="openPickImported"
       @pick-disk="pickFromDisk"
       @record-all="onRecordAll"
+      @batch-template="openBatchTemplate"
       @delete-queue="openDeleteQueue"
     />
     <PickImportedProjectModal
@@ -795,11 +925,21 @@ async function onRecordAll() {
       @pick-template="openSelectTemplate"
       @record="onRecordProject(projectMenu.queue, projectMenu.project)"
       @locate="onLocateProject(projectMenu.project)"
+      @reload-project="
+        onReloadProject(projectMenu.queue, projectMenu.project)
+      "
     />
     <SelectTemplateModal
-      v-if="templateTarget"
-      :project-name="templateTarget.project.name"
-      @close="templateTarget = null"
+      v-if="templateTarget || batchTemplateQueue"
+      :project-name="
+        batchTemplateQueue
+          ? `「${batchTemplateQueue.name}」全部项目`
+          : templateTarget?.project.name ?? ''
+      "
+      @close="
+        templateTarget = null;
+        batchTemplateQueue = null;
+      "
       @save="onTemplateSave"
     />
     <ConfigProjectInfoModal

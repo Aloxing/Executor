@@ -83,8 +83,8 @@ function onClick() {
       <button
         type="button"
         class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-7 cursor-pointer items-center justify-center rounded-lg bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
-        aria-label="修改模板"
-        title="修改模板"
+        aria-label="修改模板信息"
+        title="修改模板信息"
         @click="emit('edit')"
       >
         <Pencil class="size-3" />
@@ -93,7 +93,7 @@ function onClick() {
         type="button"
         class="text-destructive hover:bg-destructive/10 inline-flex size-7 cursor-pointer items-center justify-center rounded-lg bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
         aria-label="删除模板"
-        title="删除模板"
+        title="删除模板（模板目录与代码/参数文件一并删除，不可恢复）"
         @click="emit('delete')"
       >
         <Trash2 class="size-3" />

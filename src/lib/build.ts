@@ -127,6 +127,18 @@ export async function stopProjectBuild(projectUuid: string): Promise<void> {
   return invoke("stop_project_build", { projectUuid })
 }
 
+/** Deletes build queues; only the records go, project files are never
+ * touched. */
+export async function deleteBuildQueues(uuids: string[]): Promise<void> {
+  return invoke("delete_build_queues", { uuids })
+}
+
+/** Path of the persistent log-cache directory (`<workspace>/build/logs`,
+ * created on demand) — full build/device log histories land there. */
+export async function getBuildLogsDir(): Promise<string> {
+  return invoke<string>("get_build_logs_dir")
+}
+
 /** Subscribes to the streamed build logs; resolves to the unlisten fn. */
 export async function listenBuildLog(
   handler: (event: BuildLogEvent) => void

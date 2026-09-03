@@ -89,7 +89,7 @@ const sourceMeta = computed(() =>
       <span
         class="bg-sky-500/15 text-sky-600 dark:text-sky-500 inline-flex size-6 shrink-0 items-center justify-center rounded-md"
         aria-hidden="true"
-        title="配置项目"
+        title="配置区项目"
       >
         <Cog class="size-3.5" />
       </span>
@@ -120,8 +120,8 @@ const sourceMeta = computed(() =>
           type="button"
           class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="executing"
-          aria-label="启动"
-          title="启动：完善配置并执行内核注入"
+          aria-label="启动配置注入"
+          title="启动：复制模板代码并执行参数/代码内核注入"
           @click.stop="emit('execute')"
         >
           <Loader2 v-if="executing" class="size-3 animate-spin" />
@@ -130,8 +130,8 @@ const sourceMeta = computed(() =>
         <button
           type="button"
           class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
-          aria-label="查看项目信息"
-          title="查看项目信息"
+          aria-label="编辑项目信息"
+          title="打开项目信息（磁盘项目可编辑名称与包名）"
           @click.stop="emit('edit')"
         >
           <Pencil class="size-3" />
@@ -141,7 +141,7 @@ const sourceMeta = computed(() =>
           type="button"
           class="text-destructive hover:bg-destructive/10 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
           aria-label="删除项目"
-          title="删除项目与配置目录"
+          title="删除项目（含配置目录与包名参数文件，不可恢复）"
           @click.stop="emit('delete')"
         >
           <Trash2 class="size-3" />

@@ -60,7 +60,7 @@ const sourceMeta = computed(() =>
           type="button"
           class="text-destructive hover:bg-destructive/10 inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded transition-colors duration-200 focus-visible:outline-none"
           aria-label="停止构建"
-          title="停止构建"
+          title="停止构建（结束构建进程及其子进程）"
           @click.stop="emit('stop')"
         >
           <OctagonX class="size-3.5" />
@@ -72,7 +72,7 @@ const sourceMeta = computed(() =>
       type="button"
       class="text-muted-foreground hover:text-destructive hover:bg-destructive/10 absolute right-1.5 top-1.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors duration-200 focus-visible:outline-none"
       aria-label="从队列删除卡片"
-      title="从队列删除卡片"
+      title="从队列删除卡片（项目文件不受影响）"
       @click="emit('delete')"
     >
       <X class="size-3" />

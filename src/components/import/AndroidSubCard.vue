@@ -57,8 +57,8 @@ const statusMeta = computed(() => {
     <button
       type="button"
       class="text-muted-foreground hover:text-destructive hover:bg-destructive/10 absolute right-1.5 top-1.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors duration-200 focus-visible:outline-none"
-      aria-label="从队列删除卡片"
-      title="从队列删除卡片"
+      aria-label="从队列移除"
+      title="从队列移除（项目与已导入文件保留）"
       @click="emit('delete')"
     >
       <X class="size-3" />

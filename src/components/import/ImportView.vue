@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Calendar, CheckSquare, ListPlus, Search, Trash2, X } from "lucide-vue-next"
-import { computed, onMounted, ref } from "vue"
+import { computed, onActivated, onMounted, ref } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
 import AndroidProjectModal from "./AndroidProjectModal.vue"
 import CalendarPicker from "./CalendarPicker.vue"
@@ -21,6 +21,14 @@ import {
   type AndroidProject,
 } from "@/lib/android"
 import { deleteQueues, listImportQueues, type ImportQueue } from "@/lib/queues"
+import { generateUuid } from "@/lib/queues"
+import {
+  addConfigProject,
+  createConfigQueue,
+  listConfigQueues,
+  recordAllConfigProjects,
+} from "@/lib/config"
+import { navigateTo } from "@/lib/nav"
 import { openInExplorer } from "@/lib/templates"
 import { showToast } from "@/lib/toast"
 
@@ -136,6 +144,8 @@ async function reload() {
 }
 
 onMounted(reload)
+// KeepAlive 缓存页面：每次切回时重新加载，同步其它页面/级联操作的变更。
+onActivated(reload)
 
 function onQueueSaved(queue: ImportQueue) {
   queues.value.push(queue)
@@ -381,6 +391,71 @@ async function onLocateProject() {
     showToast(typeof e === "string" ? e : "定位失败")
   }
 }
+
+// --- 自动化流水线第一步：一键转配置区 -------------------------------------
+
+// Forwards every imported project of the queue into a same-named config
+// queue (created on demand, reused when it already exists), records them
+// all (content copy) and then guides the user to the config page.
+async function onTransferToConfig() {
+  const queue = menu.value?.queue
+  menu.value = null
+  if (!queue || importingUuid.value) return
+  const attached = projects.value.filter((p) => p.queueUuid === queue.uuid)
+  const imported = attached.filter((p) => p.importStatus === "imported")
+  if (!imported.length) {
+    showToast(`队列「${queue.name}」下没有已导入的项目，请先记录项目`)
+    return
+  }
+  importingUuid.value = queue.uuid
+  try {
+    const configQueues = await listConfigQueues()
+    let target = configQueues.find((q) => q.name === queue.name)
+    if (!target) {
+      target = await createConfigQueue({
+        name: queue.name,
+        uuid: generateUuid(),
+        queueType: queue.queueType,
+      })
+    }
+    // Attach every imported project; duplicates (by package name) skip.
+    const existing = new Set(
+      target.projects
+        .filter((p) => p.source === "imported")
+        .map((p) => p.packageName)
+    )
+    let added = 0
+    for (const project of imported) {
+      if (existing.has(project.packageName)) continue
+      try {
+        target = await addConfigProject(target.uuid, {
+          name: project.appName,
+          source: "imported",
+          packageName: project.packageName,
+          rootPath: project.location ?? project.rootPath,
+        })
+        added++
+      } catch {
+        // Backend rejected (duplicate etc.) — keep the pipeline running.
+      }
+    }
+    // Copy the contents into the config area so it can work on them.
+    await recordAllConfigProjects(target.uuid)
+    const pending = attached.length - imported.length
+    showToast(
+      `已转入配置区：新增 ${added} 个，队列共 ${target.projects.length} 个项目${
+        pending ? `，跳过未导入 ${pending} 个` : ""
+      }`,
+      "success"
+    )
+    navigateTo("config")
+    showToast(`请在配置队列「${queue.name}」上右键选择「批量模板配置」`, "info")
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "转入配置区失败，请重试")
+  } finally {
+    importingUuid.value = ""
+  }
+}
 </script>
 
 <template>
@@ -609,6 +684,7 @@ async function onLocateProject() {
       @add-android="openAddProject"
       @record-all="openRecordAll"
       @delete-queue="openDeleteQueue"
+      @transfer-config="onTransferToConfig"
     />
     <ImportProjectContextMenu
       v-if="subMenu"

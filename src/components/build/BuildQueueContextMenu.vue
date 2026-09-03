@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { FolderOpen, PackageOpen, Play } from "lucide-vue-next"
+import { FolderOpen, PackageOpen, Play, Trash2 } from "lucide-vue-next"
 import { computed } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
-import { buildCommands, type BuildQueue } from "@/lib/build"
+import type { BuildQueue } from "@/lib/build"
 
 const props = defineProps<{
   x: number
@@ -14,8 +14,9 @@ const emit = defineEmits<{
   close: []
   "pick-config": []
   "pick-disk": []
-  /** Runs the chosen gradle flow for every project of the queue. */
-  "build-all": [args: string[]]
+  /** Opens the build-mode dialog (command + serial/parallel). */
+  "build-all-open": []
+  "delete-queue": []
 }>()
 
 // Keep the menu inside the viewport (approximate menu size 230x210).
@@ -44,33 +45,44 @@ useShortcut("close", () => emit("close"))
         type="button"
         role="menuitem"
         class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="从配置区选择已完善配置的项目，仅记录地址"
         @click="emit('pick-config')"
       >
         <PackageOpen class="size-3.5 shrink-0" />
-        从已完善配置的项目构建
+        添加项目：从配置区项目
       </button>
       <button
         type="button"
         role="menuitem"
         class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="从磁盘选择项目目录，仅记录地址不复制文件"
         @click="emit('pick-disk')"
       >
         <FolderOpen class="size-3.5 shrink-0" />
-        从磁盘中项目选择构建
+        添加项目：从磁盘目录
       </button>
       <div class="bg-border mx-1 my-1 h-px" aria-hidden="true" />
-      <!-- Build-all commands: gradle wrapper first, then gradlew <args> -->
+      <!-- Build-all: the mode dialog picks the command and serial/parallel -->
       <button
-        v-for="command in buildCommands"
-        :key="command.label"
         type="button"
         role="menuitem"
         class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
-        :title="`为队列下全部项目执行 gradle wrapper → gradlew ${command.label}`"
-        @click="emit('build-all', command.args)"
+        title="为队列下全部项目构建：选择构建命令与串行/并行方式"
+        @click="emit('build-all-open')"
       >
         <Play class="size-3.5 shrink-0" />
-        全部构建：{{ command.label }}
+        全部构建…
+      </button>
+      <div class="bg-border mx-1 my-1 h-px" aria-hidden="true" />
+      <button
+        type="button"
+        role="menuitem"
+        class="text-destructive hover:bg-destructive/10 flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="仅删除队列与卡片记录，项目文件不受影响"
+        @click="emit('delete-queue')"
+      >
+        <Trash2 class="size-3.5 shrink-0" />
+        删除队列
       </button>
     </div>
   </div>

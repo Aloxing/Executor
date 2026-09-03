@@ -6,8 +6,8 @@ import type { BuildProject, BuildQueue } from "@/lib/build"
 
 const props = defineProps<{
   queue: BuildQueue
-  /** Uuid of the project currently building inside this queue, if any. */
-  buildingUuid?: string
+  /** Uuids of the projects currently building inside this queue. */
+  buildingUuids?: string[]
   /** True while a build-all of this queue is running. */
   building?: boolean
 }>()
@@ -81,7 +81,7 @@ function onClick() {
         v-for="project in queue.projects"
         :key="project.uuid"
         :project="project"
-        :building="buildingUuid === project.uuid"
+        :building="buildingUuids?.includes(project.uuid) ?? false"
         @delete="emit('delete-project', project)"
         @stop="emit('stop-project', project)"
         @contextmenu="emit('project-contextmenu', project, $event)"

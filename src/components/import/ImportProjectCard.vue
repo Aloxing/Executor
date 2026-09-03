@@ -104,8 +104,8 @@ const statusMeta = computed(() => {
         <button
           type="button"
           class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
-          aria-label="修改信息"
-          title="修改信息"
+          aria-label="修改项目信息"
+          title="修改项目信息"
           @click="emit('edit')"
         >
           <Pencil class="size-3" />
@@ -114,7 +114,7 @@ const statusMeta = computed(() => {
           type="button"
           class="text-destructive hover:bg-destructive/10 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none"
           aria-label="删除项目"
-          title="删除项目"
+          title="删除项目（含已导入的包名文件夹，不可恢复）"
           @click="emit('delete')"
         >
           <Trash2 class="size-3" />

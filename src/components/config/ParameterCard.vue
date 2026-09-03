@@ -913,6 +913,7 @@ async function refreshFromTemplate() {
           type="button"
           class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="saving || !dirty"
+          title="保存参数修改（写入 config/parameter/包名.json）"
           @click="save"
         >
           <Loader2 v-if="saving" class="size-2.5 animate-spin" />

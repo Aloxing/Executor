@@ -246,6 +246,10 @@ fn run_update(
         &format!("包名：{}", updated.package_name),
         vec![updated.app_name.clone()],
     );
+    // Config cards of this package follow the rename (unrecorded ones).
+    if updated.package_name != package_name {
+        crate::configs::sync_import_rename(app, &package_name, &updated.package_name);
+    }
     Ok(updated)
 }
 
@@ -340,6 +344,8 @@ pub fn delete_android_projects(
     // Explorer briefly holds a directory).
     let base = package_dir(&app)?;
     let mut failed: Vec<String> = Vec::new();
+    // Kept for the config-area cascade after the record was written.
+    let removed_pkgs = removed.clone();
     for name in &removed {
         let dir = base.join(name);
         if !dir.is_dir() {
@@ -360,6 +366,8 @@ pub fn delete_android_projects(
         "记录与导入文件夹已删除",
         removed,
     );
+    // Unrecorded config cards of these packages lost their data source.
+    crate::configs::drop_unrecorded_by_packages(&app, &removed_pkgs);
     if !failed.is_empty() {
         return Err(format!(
             "记录已删除，但文件夹删除失败（可能被占用）：{}",
@@ -428,6 +436,8 @@ pub fn delete_android_project(app: tauri::AppHandle, package_name: String) -> Re
         "记录与导入文件夹已删除",
         vec![package_name.clone()],
     );
+    // Unrecorded config cards of this package lost their data source.
+    crate::configs::drop_unrecorded_by_packages(&app, &[package_name.clone()]);
 
     // Cleanup of the package folder (retry once in case a process such as
     // Explorer briefly holds the directory).
