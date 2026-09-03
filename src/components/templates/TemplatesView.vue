@@ -2,6 +2,7 @@
 import { CheckSquare, Plus, Search, Trash2, X } from "lucide-vue-next"
 import { computed, onActivated, onMounted, ref } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
+import { byCreatedAt } from "@/lib/queues"
 import JsonEditorModal from "../JsonEditorModal.vue"
 import CreateTemplateModal from "./CreateTemplateModal.vue"
 import DeleteConfirmDialog from "./DeleteConfirmDialog.vue"
@@ -50,12 +51,15 @@ const paramEditorContent = ref("")
 // Case-insensitive filter across name, type and description.
 const filtered = computed(() => {
   const query = keyword.value.trim().toLowerCase()
-  if (!query) return templates.value
-  return templates.value.filter((t) =>
-    [t.name, t.templateType, t.description].some((field) =>
-      field.toLowerCase().includes(query)
-    )
-  )
+  // Newest-first: 降序，最新的排第一。
+  const list = !query
+    ? templates.value
+    : templates.value.filter((t) =>
+        [t.name, t.templateType, t.description].some((field) =>
+          field.toLowerCase().includes(query)
+        )
+      )
+  return [...list].sort(byCreatedAt)
 })
 
 const allFilteredSelected = computed(

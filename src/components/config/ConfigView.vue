@@ -16,7 +16,7 @@ import SelectTemplateModal from "./SelectTemplateModal.vue"
 import ConfirmDialog from "../import/ConfirmDialog.vue"
 import type { AndroidProject } from "@/lib/android"
 import { addBuildProject, createBuildQueue, listBuildQueues } from "@/lib/build"
-import { generateUuid } from "@/lib/queues"
+import { byCreatedAt, generateUuid } from "@/lib/queues"
 import { navigateTo } from "@/lib/nav"
 import { pendingBuildRequest } from "@/lib/pipeline"
 import {
@@ -135,16 +135,19 @@ const startedProjects = computed(() =>
   queues.value.flatMap((queue) => queue.projects.filter((p) => p.started))
 )
 
-// Queue list filtered by the shared config-date filter (creation date).
-// The template filter targets project-directory cards only.
-const filteredQueues = computed(() =>
-  !timeFilter.value
+// Queue list filtered by the shared config-date filter (creation date),
+// displayed newest-first. The template filter targets project-directory
+// cards only.
+const filteredQueues = computed(() => {
+  const list = !timeFilter.value
     ? queues.value
     : queues.value.filter((q) => q.createdAt.startsWith(timeFilter.value))
-)
+  return [...list].sort(byCreatedAt)
+})
 
 // Directory projects filtered by their config (start) time and by the
-// template name tag recorded on the card when a template was selected.
+// template name tag recorded on the card when a template was selected,
+// displayed newest-first.
 const filteredStarted = computed(() => {
   let list = startedProjects.value
   if (timeFilter.value) {
@@ -153,7 +156,7 @@ const filteredStarted = computed(() => {
   if (templateFilter.value) {
     list = list.filter(matchesTemplate)
   }
-  return list
+  return [...list].sort(byCreatedAt)
 })
 
 // Template-name options come straight from the templates page library:

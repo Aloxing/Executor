@@ -13,6 +13,7 @@ import {
   type OutputFile,
   type OutputRecord,
 } from "@/lib/output"
+import { byCreatedAt } from "@/lib/queues"
 import { useShortcut } from "@/lib/shortcuts"
 import { showToast } from "@/lib/toast"
 
@@ -80,7 +81,8 @@ const filtered = computed(() => {
   } else if (templateFilter.value) {
     list = list.filter((r) => r.templateName === templateFilter.value)
   }
-  return list
+  // Newest-first: 降序，最新的排第一。
+  return [...list].sort(byCreatedAt)
 })
 
 // --- Batch selection -----------------------------------------------------------

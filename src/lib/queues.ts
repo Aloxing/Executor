@@ -33,6 +33,15 @@ export function generateUuid(): string {
   })
 }
 
+/** Sort comparator: cards display newest-first (谁后创建谁排第一，降序).
+ * "YYYY-MM-DD HH:mm:ss" timestamps compare correctly as strings. */
+export function byCreatedAt<T extends { createdAt: string }>(
+  a: T,
+  b: T
+): number {
+  return b.createdAt.localeCompare(a.createdAt)
+}
+
 export async function listImportQueues(): Promise<ImportQueue[]> {
   try {
     return await invoke<ImportQueue[]>("list_import_queues")

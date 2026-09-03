@@ -20,7 +20,7 @@ import {
   listAndroidProjects,
   type AndroidProject,
 } from "@/lib/android"
-import { deleteQueues, listImportQueues, type ImportQueue } from "@/lib/queues"
+import { byCreatedAt, deleteQueues, listImportQueues, type ImportQueue } from "@/lib/queues"
 import { generateUuid } from "@/lib/queues"
 import {
   addConfigProject,
@@ -110,20 +110,22 @@ function matchesTime(createdAt: string): boolean {
 
 // Queue list filtered by the shared creation-date filter.
 const filteredQueues = computed(() =>
-  queues.value.filter((q) => matchesTime(q.createdAt))
+  queues.value.filter((q) => matchesTime(q.createdAt)).sort(byCreatedAt)
 )
 
 // Project search matches the app name and the package name.
 const filteredProjects = computed(() => {
   const kw = projectKeyword.value.trim().toLowerCase()
-  return projects.value.filter((p) => {
-    if (!matchesTime(p.createdAt)) return false
-    if (!kw) return true
-    return (
-      p.packageName.toLowerCase().includes(kw) ||
-      p.appName.toLowerCase().includes(kw)
-    )
-  })
+  return projects.value
+    .filter((p) => {
+      if (!matchesTime(p.createdAt)) return false
+      if (!kw) return true
+      return (
+        p.packageName.toLowerCase().includes(kw) ||
+        p.appName.toLowerCase().includes(kw)
+      )
+    })
+    .sort(byCreatedAt)
 })
 
 const allSelected = computed(() =>

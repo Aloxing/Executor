@@ -11,6 +11,7 @@ import {
   removeRecords,
   type OpRecord,
 } from "@/lib/records"
+import { byCreatedAt } from "@/lib/queues"
 import { useShortcut } from "@/lib/shortcuts"
 import { showToast } from "@/lib/toast"
 
@@ -76,7 +77,8 @@ const filtered = computed(() => {
   if (pageFilter.value) {
     list = list.filter((r) => r.page === pageFilter.value)
   }
-  return list
+  // Newest-first: 降序，最新的排第一。
+  return [...list].sort(byCreatedAt)
 })
 
 const filterActive = computed(

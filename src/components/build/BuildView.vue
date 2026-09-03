@@ -33,6 +33,7 @@ import {
   type AndroidDevice,
   type DeviceLogEvent,
 } from "@/lib/devices"
+import { byCreatedAt } from "@/lib/queues"
 import { settings } from "@/lib/settings"
 import { useShortcut } from "@/lib/shortcuts"
 import { pendingBuildRequest } from "@/lib/pipeline"
@@ -40,6 +41,9 @@ import { openInExplorer } from "@/lib/templates"
 import { showToast } from "@/lib/toast"
 
 const queues = ref<BuildQueue[]>([])
+
+// Queue cards display newest-first (降序，最新的排第一).
+const sortedQueues = computed(() => [...queues.value].sort(byCreatedAt))
 
 // Build type selector; only Android is supported for now.
 const buildType = ref("android")
@@ -708,7 +712,7 @@ async function onStopProject(project: BuildProject) {
         <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
           <template v-if="queues.length">
             <BuildQueueCard
-              v-for="queue in queues"
+              v-for="queue in sortedQueues"
               :key="queue.uuid"
               :queue="queue"
               :building-uuids="[...buildingUuids]"
