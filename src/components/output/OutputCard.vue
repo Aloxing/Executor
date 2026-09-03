@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, Copy, FileBox, Trash2 } from "lucide-vue-next"
+import { ChevronDown, Copy, FileBox, Loader2, SmartphoneNfc, Trash2 } from "lucide-vue-next"
 import { ref } from "vue"
 import type { OutputFile, OutputRecord } from "@/lib/output"
 
@@ -8,14 +8,24 @@ const props = defineProps<{
   /** Batch selection mode: card becomes a toggle, actions are hidden. */
   selectMode?: boolean
   selected?: boolean
+  /** True when an adb device is connected; shows the apk install button. */
+  canInstall?: boolean
+  /** Path of the file currently installing (spinner on its row). */
+  installingPath?: string
 }>()
 
 const emit = defineEmits<{
   delete: []
   "delete-file": [file: OutputFile]
   "copy-file": [file: OutputFile]
+  "install-file": [file: OutputFile]
   "toggle-select": []
 }>()
+
+// Only apk artifacts can be installed onto a phone.
+function isApk(name: string): boolean {
+  return name.toLowerCase().endsWith(".apk")
+}
 
 // Collapsible file list (伸缩模式): the card expands to show every
 // artifact with its own copy/delete actions.
@@ -148,6 +158,18 @@ function onClick() {
         >
           {{ file.name }}
         </p>
+        <button
+          v-if="canInstall && isApk(file.name)"
+          type="button"
+          class="text-primary hover:bg-primary/10 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-transparent transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="installingPath === file.path"
+          aria-label="安装到手机"
+          title="adb install：直接安装该 apk 到已连接的手机（保留应用数据覆盖安装）"
+          @click.stop="emit('install-file', file)"
+        >
+          <Loader2 v-if="installingPath === file.path" class="size-3 animate-spin" />
+          <SmartphoneNfc v-else class="size-3" />
+        </button>
         <button
           type="button"
           class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-transparent transition-colors duration-200 focus-visible:outline-none"

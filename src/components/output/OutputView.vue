@@ -5,6 +5,7 @@ import AppSelect from "../AppSelect.vue"
 import CalendarPicker from "../import/CalendarPicker.vue"
 import ConfirmDialog from "../import/ConfirmDialog.vue"
 import OutputCard from "./OutputCard.vue"
+import InstallTargetModal from "./InstallTargetModal.vue"
 import {
   copyOutputFile,
   listOutputs,
@@ -13,6 +14,11 @@ import {
   type OutputFile,
   type OutputRecord,
 } from "@/lib/output"
+import {
+  installApk,
+  listAndroidDevices,
+  type AndroidDevice,
+} from "@/lib/devices"
 import { byCreatedAt } from "@/lib/queues"
 import { useShortcut } from "@/lib/shortcuts"
 import { showToast } from "@/lib/toast"
@@ -198,6 +204,71 @@ async function onCopyFile(file: OutputFile) {
   }
 }
 
+// --- Install apk onto a phone ----------------------------------------------------
+
+// True while at least one authorized adb device is connected; drives the
+// install buttons on apk file rows.
+const deviceConnected = ref(false)
+// Path of the file currently installing (spinner on its row button).
+const installingPath = ref("")
+// Device chooser state when several phones are connected.
+const installTarget = ref<{ file: OutputFile; devices: AndroidDevice[] } | null>(
+  null
+)
+
+// Cheap presence check on page load/activation; adb failures (not
+// installed, no device) simply hide the install buttons.
+async function refreshDeviceState() {
+  try {
+    const devices = await listAndroidDevices()
+    deviceConnected.value = devices.some((d) => d.status === "device")
+  } catch {
+    deviceConnected.value = false
+  }
+}
+
+// Install one apk: single device installs right away, several devices
+// open the chooser modal first.
+async function onInstallFile(file: OutputFile) {
+  if (installingPath.value) return
+  try {
+    const devices = (await listAndroidDevices()).filter(
+      (d) => d.status === "device"
+    )
+    deviceConnected.value = devices.length > 0
+    if (!devices.length) {
+      showToast("未检测到已授权的设备，请检查 USB 调试连接")
+      return
+    }
+    if (devices.length === 1) {
+      await runInstall(file, devices[0].serial)
+      return
+    }
+    installTarget.value = { file, devices }
+  } catch (e) {
+    deviceConnected.value = false
+    showToast(typeof e === "string" ? e : "设备检测失败，请确认已安装 adb")
+  }
+}
+
+async function runInstall(file: OutputFile, serial: string) {
+  installingPath.value = file.path
+  try {
+    const summary = await installApk(file.path, serial)
+    showToast(summary, "success")
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "安装失败")
+  } finally {
+    installingPath.value = ""
+  }
+}
+
+function onPickInstallDevice(serial: string) {
+  const target = installTarget.value
+  installTarget.value = null
+  if (target) runInstall(target.file, serial)
+}
+
 // --- Loading -----------------------------------------------------------------------
 
 async function reload() {
@@ -216,10 +287,16 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  reload()
+  refreshDeviceState()
+})
 // Builds finish while other pages are visible; refresh whenever the
-// output page becomes active again.
-onActivated(reload)
+// output page becomes active again (device state may change too).
+onActivated(() => {
+  reload()
+  refreshDeviceState()
+})
 </script>
 
 <template>
@@ -360,11 +437,14 @@ onActivated(reload)
             :record="record"
             :select-mode="selectMode"
             :selected="selected.has(record.uuid)"
+            :can-install="deviceConnected"
+            :installing-path="installingPath"
             @delete="pendingDelete = { kind: 'card', record }"
             @delete-file="
               (file) => (pendingDelete = { kind: 'file', record, file })
             "
             @copy-file="onCopyFile"
+            @install-file="onInstallFile"
             @toggle-select="toggleSelect(record.uuid)"
           />
         </template>
@@ -390,6 +470,13 @@ onActivated(reload)
       :busy="deleting"
       @cancel="pendingDelete = null"
       @confirm="confirmDelete"
+    />
+    <InstallTargetModal
+      v-if="installTarget"
+      :file-name="installTarget.file.name"
+      :devices="installTarget.devices"
+      @close="installTarget = null"
+      @pick="onPickInstallDevice"
     />
     <CalendarPicker
       v-if="calendar"

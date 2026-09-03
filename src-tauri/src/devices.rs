@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -169,6 +169,66 @@ fn scan_devices() -> Result<Vec<AndroidDevice>, String> {
         });
     }
     Ok(devices)
+}
+
+/// Installs one apk onto a device with `adb install -r` (reinstall,
+/// keeping app data). Installation can take tens of seconds for large
+/// apks, so it runs on the async thread pool.
+#[tauri::command]
+pub async fn install_apk(
+    app: tauri::AppHandle,
+    path: String,
+    serial: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = path.trim().to_string();
+        if !Path::new(&path).is_file() {
+            return Err("apk 文件不存在，可能已被移动或删除".to_string());
+        }
+        let serial = serial.trim().to_string();
+        if serial.is_empty() {
+            return Err("设备序列号为空".to_string());
+        }
+        let adb = resolve_adb();
+        let output = adb_command(&adb)
+            .args(["-s", &serial, "install", "-r", &path])
+            .output()
+            .map_err(|e| {
+                format!(
+                    "无法执行 adb（{}），请确认已安装 Android SDK platform-tools：{e}",
+                    adb.display()
+                )
+            })?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // adb reports success ("Success") and failures
+        // ("Failure [INSTALL_FAILED_…]") on stdout depending on version.
+        let failed =
+            !output.status.success() || stdout.contains("Failure") || !stdout.contains("Success");
+        if failed {
+            let detail = if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            };
+            return Err(format!("安装失败：{detail}"));
+        }
+        let name = Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        crate::records::log_operation(
+            &app,
+            "output",
+            "modify",
+            "安装产出文件到设备",
+            &format!("设备：{serial}"),
+            vec![name.clone()],
+        );
+        Ok(format!("「{name}」已安装到设备"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Starts streaming one device's logcat; with a non-empty `package_name`

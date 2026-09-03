@@ -32,7 +32,7 @@ use builds::{
 };
 use outputs::{copy_output_file, list_outputs, remove_output_file, remove_outputs};
 use devices::{
-    list_android_devices, start_device_logcat, stop_device_logcat, DeviceRegistry,
+    install_apk, list_android_devices, start_device_logcat, stop_device_logcat, DeviceRegistry,
 };
 use records::{list_records, remove_record_item, remove_records};
 use configs::{
@@ -119,6 +119,7 @@ pub fn run() {
             remove_output_file,
             copy_output_file,
             list_android_devices,
+            install_apk,
             start_device_logcat,
             stop_device_logcat,
             list_records,

@@ -30,6 +30,12 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
   return invoke<AndroidDevice[]>("list_android_devices")
 }
 
+/** Installs one apk onto the device (`adb install -r`, keeps app data).
+ * Resolves to a user-facing Chinese summary; may take tens of seconds. */
+export async function installApk(path: string, serial: string): Promise<string> {
+  return invoke<string>("install_apk", { path, serial })
+}
+
 /** Starts streaming one device's logcat; with a non-empty `packageName`
  * only that app's logs are captured (auto-attach / re-attach by pid).
  * The promise stays pending until the capture is stopped. */

@@ -102,7 +102,7 @@ onUnmounted(stopListening)
       <div
         class="flex w-full flex-col rounded-xl border border-transparent bg-muted/40 px-3 py-2.5"
       >
-        <div class="mb-2 flex items-center justify-between gap-3">
+        <div class="mb-2.5 flex items-center justify-between gap-3">
           <p
             class="text-muted-foreground text-[clamp(10px,1.1vw,11px)] leading-relaxed"
           >
@@ -111,7 +111,8 @@ onUnmounted(stopListening)
           </p>
           <button
             type="button"
-            class="border-border bg-background hover:bg-accent/60 inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[clamp(10px,1.1vw,11px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+            class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-muted/60 px-2 py-1 text-[clamp(10px,1.1vw,11px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+            title="清除全部自定义，恢复默认快捷键"
             @click="restoreAll"
           >
             <RotateCcw class="size-2.5" />
@@ -122,16 +123,19 @@ onUnmounted(stopListening)
           <div
             v-for="action in SHORTCUT_ORDER"
             :key="action"
-            class="bg-background/60 flex items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5"
+            class="bg-background/60 flex items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 transition-colors duration-200 hover:border-border"
+            :class="listening === action ? 'border-primary/40 bg-primary/5' : ''"
           >
             <span
-              class="min-w-0 flex-1 truncate text-[clamp(11px,1.25vw,12px)] font-semibold"
+              class="min-w-0 flex-1 truncate text-[clamp(11px,1.25vw,12px)] font-medium"
             >
               {{ SHORTCUT_LABELS[action] ?? action }}
             </span>
+            <!-- Key cap: primary-tinted chip, same family as the template
+                 name tags used across the app. -->
             <kbd
-              class="text-muted-foreground shrink-0 rounded-md border border-border/60 px-1.5 py-0.5 font-mono text-[clamp(9px,1vw,10px)]"
-              :class="listening === action ? 'text-foreground ring-ring ring-2' : ''"
+              class="bg-primary/10 text-primary shrink-0 rounded-md px-2 py-0.5 font-mono text-[clamp(9px,1vw,10px)] font-medium"
+              :class="listening === action ? 'ring-primary/40 ring-2' : ''"
             >
               {{
                 listening === action
@@ -141,15 +145,16 @@ onUnmounted(stopListening)
             </kbd>
             <button
               type="button"
-              class="border-border bg-background hover:bg-accent/60 inline-flex shrink-0 cursor-pointer items-center rounded-md border px-1.5 py-0.5 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+              class="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex shrink-0 cursor-pointer items-center rounded-md px-1.5 py-0.5 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+              :class="listening === action ? 'text-primary font-semibold' : ''"
               @click="startListening(action)"
             >
-              修改
+              {{ listening === action ? "录入中…" : "修改" }}
             </button>
             <button
               v-if="isCustomized(action)"
               type="button"
-              class="text-muted-foreground hover:text-foreground inline-flex shrink-0 cursor-pointer items-center rounded-md p-0.5 transition-colors duration-200 focus-visible:outline-none"
+              class="text-muted-foreground hover:text-foreground hover:bg-muted inline-flex shrink-0 cursor-pointer items-center rounded-md p-0.5 transition-colors duration-200 focus-visible:outline-none"
               aria-label="恢复该快捷键默认值"
               title="恢复默认"
               @click="resetShortcut(action)"
