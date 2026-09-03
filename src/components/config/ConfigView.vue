@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Calendar, CheckSquare, ListPlus, Search, Trash2, X } from "lucide-vue-next"
-import { computed, onActivated, onMounted, ref } from "vue"
+import { computed, onActivated, onMounted, ref, watch } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
+import AppSelect from "../AppSelect.vue"
 import CalendarPicker from "../import/CalendarPicker.vue"
 import ConfigDirectoryCard from "./ConfigDirectoryCard.vue"
 import ConfigProjectContextMenu from "./ConfigProjectContextMenu.vue"
@@ -26,6 +27,7 @@ import {
   listConfigQueues,
   recordAllConfigProjects,
   recordConfigProject,
+  refreshProjectParameter,
   reloadConfigProject,
   removeConfigProject,
   resetProjectCode,
@@ -34,7 +36,7 @@ import {
   type ConfigProject,
   type ConfigQueue,
 } from "@/lib/config"
-import { openInExplorer } from "@/lib/templates"
+import { listTemplates, openInExplorer, type TemplateInfo } from "@/lib/templates"
 import { showToast } from "@/lib/toast"
 
 const queues = ref<ConfigQueue[]>([])
@@ -46,6 +48,11 @@ const projectKeyword = ref("")
 // match their creation date, directory projects their config (start)
 // time.
 const timeFilter = ref("")
+// Template library; the created template names are the filter options.
+const templates = ref<TemplateInfo[]>([])
+// Selected template-name filter; applies to the project-directory cards
+// through the template name tag recorded on each card ("" = all).
+const templateFilter = ref("")
 // Themed calendar popover state (anchor position of the trigger).
 const calendar = ref<{ x: number; y: number } | null>(null)
 
@@ -129,20 +136,53 @@ const startedProjects = computed(() =>
 )
 
 // Queue list filtered by the shared config-date filter (creation date).
+// The template filter targets project-directory cards only.
 const filteredQueues = computed(() =>
   !timeFilter.value
     ? queues.value
     : queues.value.filter((q) => q.createdAt.startsWith(timeFilter.value))
 )
 
-// Directory projects filtered by their config (start) time.
-const filteredStarted = computed(() =>
-  !timeFilter.value
-    ? startedProjects.value
-    : startedProjects.value.filter((p) =>
-        (p.startedAt ?? "").startsWith(timeFilter.value)
-      )
-)
+// Directory projects filtered by their config (start) time and by the
+// template name tag recorded on the card when a template was selected.
+const filteredStarted = computed(() => {
+  let list = startedProjects.value
+  if (timeFilter.value) {
+    list = list.filter((p) => (p.startedAt ?? "").startsWith(timeFilter.value))
+  }
+  if (templateFilter.value) {
+    list = list.filter(matchesTemplate)
+  }
+  return list
+})
+
+// Template-name options come straight from the templates page library:
+// every created template name, sorted.
+const templateFilterOptions = computed(() => {
+  const options = [{ value: "", label: "全部模板" }]
+  for (const name of templates.value.map((t) => t.name).sort()) {
+    options.push({ value: name, label: name })
+  }
+  return options
+})
+
+// Drop a stale selection when its template leaves the library.
+watch(templateFilterOptions, (options) => {
+  if (
+    templateFilter.value &&
+    !options.some((o) => o.value === templateFilter.value)
+  ) {
+    templateFilter.value = ""
+  }
+})
+
+// True when a project card passes the template filter: the template name
+// tag recorded on the card (选择模板时写入 templateName) must equal the
+// choice.
+function matchesTemplate(project: ConfigProject): boolean {
+  if (!templateFilter.value) return true
+  return (project.templateName ?? "").trim() === templateFilter.value
+}
 
 const selectedCount = computed(() =>
   selectTarget.value === "queues"
@@ -162,6 +202,13 @@ const allSelected = computed(() =>
 
 async function reload() {
   queues.value = await listConfigQueues()
+  // The template library drives the type filter; a failure here must
+  // never block the config page itself.
+  try {
+    templates.value = await listTemplates()
+  } catch {
+    templates.value = []
+  }
 }
 
 onMounted(reload)
@@ -686,6 +733,28 @@ function onResetCode(project: ConfigProject) {
   }
 }
 
+// 从模板重置参数: re-copy the template's parameter JSON over the
+// project's parameter file; an expanded ParameterCard reloads it
+// through the refresh tick.
+function onResetParameter(project: ConfigProject) {
+  projectMenu.value = null
+  confirm.value = {
+    title: "从模板重置参数",
+    confirmLabel: "重置",
+    message: `确定重置项目「${project.name}」的参数吗？将用模板「${
+      project.templateName ?? ""
+    }」的参数 JSON 覆盖 config/parameter 下的参数文件（参数卡片中的本地修改会被替换）。`,
+    run: async () => {
+      await refreshProjectParameter(project.uuid)
+      paramRefreshTicks.value = {
+        ...paramRefreshTicks.value,
+        [project.uuid]: (paramRefreshTicks.value[project.uuid] ?? 0) + 1,
+      }
+      showToast(`项目「${project.name}」的参数已从模板重置`, "success")
+    },
+  }
+}
+
 // 刷新: re-read this project's data from the local files in real time —
 // queues.json for the card, and the parameter JSON when the card is
 // expanded (its ParameterCard reloads through the refresh tick).
@@ -784,6 +853,16 @@ async function onRecordAll() {
         >
           <X class="size-3" />
         </button>
+      </div>
+      <!-- Template filter: options are the template names created on the
+           templates page; matches project-directory cards through the
+           template name tag recorded on each card. -->
+      <div class="w-[clamp(120px,13vw,170px)]" title="按模板名称筛选项目目录中的项目卡片">
+        <AppSelect
+          v-model="templateFilter"
+          :options="templateFilterOptions"
+          aria-label="按模板名称筛选"
+        />
       </div>
       <!-- Right cluster: mode-dependent actions -->
       <div class="ml-auto flex shrink-0 items-center gap-3">
@@ -907,7 +986,7 @@ async function onRecordAll() {
         >
           <h2 class="text-[clamp(11px,1.3vw,13px)] font-semibold">项目目录</h2>
           <span class="text-muted-foreground text-[clamp(9px,1vw,10px)]">
-            <template v-if="timeFilter">
+            <template v-if="timeFilter || templateFilter">
               匹配 {{ filteredStarted.length }} / {{ startedProjects.length }}
             </template>
             <template v-else>共 {{ startedProjects.length }} 个</template>
@@ -986,6 +1065,7 @@ async function onRecordAll() {
         onReloadProject(projectMenu.queue, projectMenu.project)
       "
       @reset-code="onResetCode(projectMenu.project)"
+      @reset-parameter="onResetParameter(projectMenu.project)"
     />
     <SelectTemplateModal
       v-if="templateTarget || batchTemplateQueue"

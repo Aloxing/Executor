@@ -283,7 +283,7 @@ onActivated(reload)
         >
           模板
         </span>
-        <div class="w-[clamp(110px,12vw,160px)]">
+        <div class="w-[clamp(120px,13vw,170px)]">
           <AppSelect
             v-model="templateFilter"
             :options="templateFilterOptions"

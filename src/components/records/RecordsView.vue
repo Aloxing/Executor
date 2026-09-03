@@ -250,7 +250,7 @@ onActivated(reload)
         <span class="text-muted-foreground shrink-0 text-[clamp(10px,1.1vw,11px)]">
           标签
         </span>
-        <div class="w-[clamp(90px,10vw,130px)]">
+        <div class="w-[clamp(120px,13vw,170px)]">
           <AppSelect
             v-model="actionFilter"
             :options="actionOptions"
@@ -263,7 +263,7 @@ onActivated(reload)
         <span class="text-muted-foreground shrink-0 text-[clamp(10px,1.1vw,11px)]">
           页面
         </span>
-        <div class="w-[clamp(90px,10vw,130px)]">
+        <div class="w-[clamp(120px,13vw,170px)]">
           <AppSelect
             v-model="pageFilter"
             :options="pageOptions"

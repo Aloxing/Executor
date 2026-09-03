@@ -99,7 +99,7 @@ onBeforeUnmount(() => {
   <div ref="rootRef" class="relative">
     <button
       type="button"
-      class="bg-background focus-visible:ring-ring hover:bg-accent/40 flex min-h-[clamp(24px,3.2vh,28px)] w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-input px-[clamp(8px,1vw,10px)] text-left text-[clamp(11px,1.25vw,12px)] leading-none transition-colors focus-visible:outline-none focus-visible:ring-2"
+      class="bg-background focus-visible:ring-ring hover:bg-accent/40 flex h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-lg border border-input pl-2.5 pr-2 text-left text-[clamp(11px,1.25vw,12px)] leading-none transition-colors focus-visible:outline-none focus-visible:ring-2"
       :aria-label="ariaLabel"
       :aria-expanded="open"
       aria-haspopup="listbox"

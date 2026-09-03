@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar, FileUp, Loader2, Plus, RefreshCw, Save, Trash2, X } from "lucide-vue-next"
+import { Calendar, FileUp, Loader2, Plus, Save, Trash2, X } from "lucide-vue-next"
 import { computed, onMounted, ref, watch } from "vue"
 import AppSelect from "../AppSelect.vue"
 import CalendarPicker from "../import/CalendarPicker.vue"
@@ -7,7 +7,6 @@ import SettingSwitch from "../settings/SettingSwitch.vue"
 import { useShortcut } from "@/lib/shortcuts"
 import {
   readProjectParameter,
-  refreshProjectParameter,
   writeProjectParameter,
   type ConfigProject,
 } from "@/lib/config"
@@ -532,38 +531,6 @@ async function save() {
     saving.value = false
   }
 }
-
-// Re-copy the template's parameter JSON from the templates page into the
-// config area and reload it; local unsaved edits are replaced.
-const refreshing = ref(false)
-
-async function refreshFromTemplate() {
-  if (!doc.value || refreshing.value) return
-  refreshing.value = true
-  try {
-    const content = await refreshProjectParameter(props.project.uuid)
-    const parsed = JSON.parse(content)
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("模板参数文件结构不正确")
-    }
-    doc.value = parsed
-    normalizeCodeEntries()
-    original.value = JSON.stringify(doc.value)
-    initDateDefaults()
-    editingArgs.value = null
-    showToast("已从模板参数文件更新", "success")
-  } catch (e) {
-    showToast(
-      typeof e === "string"
-        ? e
-        : e instanceof Error
-          ? e.message
-          : "更新失败，请重试"
-    )
-  } finally {
-    refreshing.value = false
-  }
-}
 </script>
 
 <template>
@@ -907,19 +874,8 @@ async function refreshFromTemplate() {
         </template>
         </div>
       </div>
-      <!-- Reset from template / save -->
+      <!-- Save (template reset moved to the card's context menu) -->
       <div class="flex items-center justify-end gap-2 pt-1">
-        <button
-          type="button"
-          class="hover:bg-muted inline-flex h-6 cursor-pointer items-center gap-1 rounded-md bg-muted/60 px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="refreshing"
-          title="从模板页参数文件夹重新复制并读取参数 JSON（覆盖本地修改）"
-          @click="refreshFromTemplate"
-        >
-          <Loader2 v-if="refreshing" class="size-2.5 animate-spin" />
-          <RefreshCw v-else class="size-2.5" />
-          从模板重置
-        </button>
         <button
           type="button"
           class="bg-primary text-primary-foreground hover:bg-primary/90 inline-flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"

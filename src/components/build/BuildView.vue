@@ -650,7 +650,7 @@ async function onStopProject(project: BuildProject) {
         >
           构建类型
         </span>
-        <div class="w-[clamp(100px,11vw,140px)]">
+        <div class="w-[clamp(120px,13vw,170px)]">
           <AppSelect
             v-model="buildType"
             :options="buildTypeOptions"
@@ -665,7 +665,7 @@ async function onStopProject(project: BuildProject) {
         >
           Gradle 环境
         </span>
-        <div v-if="gradleEnvOptions.length" class="w-[clamp(140px,15vw,200px)]">
+        <div v-if="gradleEnvOptions.length" class="w-[clamp(120px,13vw,170px)]">
           <AppSelect
             v-model="gradleEnv"
             :options="gradleEnvOptions"

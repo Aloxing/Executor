@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FolderDown, FileCode, LayoutTemplate, MapPin, RefreshCw } from "lucide-vue-next"
+import { FolderDown, FileCode, LayoutTemplate, MapPin, RefreshCw, RotateCcw } from "lucide-vue-next"
 import { computed } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
 import type { ConfigProject } from "@/lib/config"
@@ -17,12 +17,13 @@ const emit = defineEmits<{
   locate: []
   "reload-project": []
   "reset-code": []
+  "reset-parameter": []
 }>()
 
-// Keep the menu inside the viewport (approximate menu size 220x210).
+// Keep the menu inside the viewport (approximate menu size 220x240).
 const position = computed(() => ({
   left: `${Math.max(4, Math.min(props.x, window.innerWidth - 230))}px`,
-  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 220))}px`,
+  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 250))}px`,
 }))
 
 // Closing is driven by the central shortcut system (Esc by default).
@@ -73,6 +74,19 @@ useShortcut("close", () => emit("close"))
       >
         <RefreshCw class="size-3.5 shrink-0" />
         重载项目（保留参数）
+      </button>
+      <!-- Re-copy the template's parameter JSON over the project's
+           parameter file; an expanded parameter card reloads it. -->
+      <button
+        v-if="project.templateName"
+        type="button"
+        role="menuitem"
+        class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="用模板的参数 JSON 覆盖 config/parameter 下的参数文件（参数卡片中的本地修改会被替换）"
+        @click="emit('reset-parameter')"
+      >
+        <RotateCcw class="size-3.5 shrink-0" />
+        从模板重置参数
       </button>
       <!-- Overwrite the project files with the template's code folder;
            parameters and kernels are not touched. -->
