@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Calendar, FileUp, Loader2, Plus, RefreshCw, Save, Trash2, X } from "lucide-vue-next"
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import AppSelect from "../AppSelect.vue"
 import CalendarPicker from "../import/CalendarPicker.vue"
 import SettingSwitch from "../settings/SettingSwitch.vue"
@@ -15,6 +15,9 @@ import { showToast } from "@/lib/toast"
 
 const props = defineProps<{
   project: ConfigProject
+  /** Bumped by the card's refresh action to reload from disk (unsaved
+   * edits are discarded — that is what an explicit refresh means). */
+  refreshTick?: number
 }>()
 
 type ParameterKind = "date" | "choice" | "boolean" | "integer" | "number" | "path" | "string"
@@ -41,6 +44,14 @@ const saving = ref(false)
 const calendar = ref<{ x: number; y: number; name: string } | null>(null)
 
 onMounted(load)
+
+// Card refresh button: re-read the parameter file from the local disk.
+watch(
+  () => props.refreshTick,
+  () => {
+    load()
+  }
+)
 
 async function load() {
   loading.value = true

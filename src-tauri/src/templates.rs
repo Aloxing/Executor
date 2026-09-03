@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
+use crate::common::storage::{copy_dir_complete, verify_file_copy};
 use crate::core::settings::read_settings;
 
 /// A template type entry shown on the templates page.
@@ -305,7 +306,11 @@ pub fn import_code_template(
     }
     let target = template_dir(&app, &name)?.join("code");
     clear_dir(&target).map_err(|e| format!("无法清空原有内容：{e}"))?;
-    copy_dir_all(&source, &target).map_err(|e| format!("复制文件失败：{e}"))?;
+    if let Err(e) = copy_dir_complete(&source, &target) {
+        // Never leave a half-copied template folder behind.
+        let _ = clear_dir(&target);
+        return Err(format!("复制文件失败：{e}"));
+    }
     set_import_flag(&app, &name, Some(true), None)
 }
 
@@ -332,8 +337,9 @@ pub fn import_parameter_template(
     let target = template_dir(&app, &name)?.join("parameter");
     clear_dir(&target).map_err(|e| format!("无法清空原有内容：{e}"))?;
     fs::create_dir_all(&target).map_err(|e| format!("无法创建文件夹：{e}"))?;
-    fs::copy(&source, target.join(format!("{name}.json")))
-        .map_err(|e| format!("复制文件失败：{e}"))?;
+    let dest = target.join(format!("{name}.json"));
+    fs::copy(&source, &dest).map_err(|e| format!("复制文件失败：{e}"))?;
+    verify_file_copy(&source, &dest)?;
     set_import_flag(&app, &name, None, Some(true))
 }
 
@@ -368,21 +374,6 @@ fn clear_dir(dir: &Path) -> std::io::Result<()> {
             fs::remove_dir_all(&path)?;
         } else {
             fs::remove_file(&path)?;
-        }
-    }
-    Ok(())
-}
-
-/// Recursively copies the contents of `src` into `dst`.
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let dest = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_all(&entry.path(), &dest)?;
-        } else {
-            fs::copy(entry.path(), &dest)?;
         }
     }
     Ok(())

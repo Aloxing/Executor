@@ -901,6 +901,8 @@ async function onStopProject(project: BuildProject) {
       v-if="pendingRemove"
       title="从队列删除卡片"
       :message="`确定将项目「${pendingRemove.project.name}」从队列「${pendingRemove.queue.name}」中删除吗？项目文件不会被删除。`"
+      confirm-label="删除"
+      danger
       :busy="removing"
       @cancel="pendingRemove = null"
       @confirm="confirmRemove"
@@ -909,6 +911,8 @@ async function onStopProject(project: BuildProject) {
       v-if="pendingDeleteQueue"
       title="删除构建队列"
       :message="`确定删除队列「${pendingDeleteQueue.name}」吗？仅删除队列与卡片记录，项目文件不受影响。`"
+      confirm-label="删除"
+      danger
       :busy="deletingQueue"
       @cancel="pendingDeleteQueue = null"
       @confirm="confirmDeleteQueue"

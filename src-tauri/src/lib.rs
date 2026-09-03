@@ -39,8 +39,8 @@ use configs::{
     add_config_project, create_config_queue, delete_config_projects, delete_config_queues,
     execute_config_project, list_config_queues, read_project_parameter,
     record_all_config_projects, record_config_project, refresh_project_parameter,
-    reload_config_project, remove_config_project, save_config_template, start_config_project,
-    update_config_project, write_project_parameter,
+    reload_config_project, remove_config_project, reset_project_code, save_config_template,
+    start_config_project, update_config_project, write_project_parameter,
 };
 use imports::{create_import_queue, delete_queues, list_import_queues};
 use templates::{
@@ -105,6 +105,7 @@ pub fn run() {
             write_project_parameter,
             refresh_project_parameter,
             execute_config_project,
+            reset_project_code,
             list_build_queues,
             create_build_queue,
             add_build_project,

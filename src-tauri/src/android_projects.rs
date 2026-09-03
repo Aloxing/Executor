@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
+use crate::common::storage::copy_dir_complete;
 use crate::imports::{load_queues, save_queues};
 
 /// An Android project attached to an import queue. Records persist in
@@ -212,7 +213,11 @@ fn run_update(
         }
         let target = package_dir(app)?.join(&package_name);
         clear_dir(&target).map_err(|e| format!("无法清空原有内容：{e}"))?;
-        copy_dir_all(&source, &target).map_err(|e| format!("复制文件失败：{e}"))?;
+        if let Err(e) = copy_dir_complete(&source, &target) {
+            // Never leave a half-copied folder behind.
+            let _ = clear_dir(&target);
+            return Err(format!("复制文件失败：{e}"));
+        }
     }
 
     // Package rename: move the on-disk folder and update queue references.
@@ -278,7 +283,11 @@ fn run_reload(app: &tauri::AppHandle, package_name: &str) -> Result<AndroidProje
     }
     let target = package_dir(app)?.join(&package_name);
     clear_dir(&target).map_err(|e| format!("无法清空已导入内容：{e}"))?;
-    copy_dir_all(&source, &target).map_err(|e| format!("重新导入失败：{e}"))?;
+    if let Err(e) = copy_dir_complete(&source, &target) {
+        // Never leave a half-copied folder behind.
+        let _ = clear_dir(&target);
+        return Err(format!("重新导入失败：{e}"));
+    }
     projects[index].import_status = "imported".to_string();
     let updated = projects[index].clone();
     save_projects(app, &projects)?;
@@ -498,8 +507,11 @@ fn run_import(app: &tauri::AppHandle, queue_uuid: &str) -> Result<Vec<AndroidPro
         let target = package_dir(app)?.join(&package_name);
         let result = clear_dir(&target)
             .and_then(|()| fs::create_dir_all(&target))
-            .and_then(|()| copy_dir_all(&source, &target));
+            .map_err(|e| e.to_string())
+            .and_then(|()| copy_dir_complete(&source, &target));
         if result.is_err() {
+            // Never leave a half-copied folder behind.
+            let _ = clear_dir(&target);
             failed.push(package_name);
             continue;
         }
@@ -553,8 +565,12 @@ fn run_import_one(app: &tauri::AppHandle, package_name: &str) -> Result<AndroidP
     let target = package_dir(app)?.join(&package_name);
     clear_dir(&target)
         .and_then(|()| fs::create_dir_all(&target))
-        .and_then(|()| copy_dir_all(&source, &target))
         .map_err(|e| format!("导入项目「{package_name}」失败：{e}"))?;
+    if let Err(e) = copy_dir_complete(&source, &target) {
+        // Never leave a half-copied folder behind.
+        let _ = clear_dir(&target);
+        return Err(format!("导入项目「{package_name}」失败：{e}"));
+    }
     projects[index].import_status = "imported".to_string();
     save_projects(app, &projects)?;
     crate::records::log_operation(
@@ -580,29 +596,6 @@ fn clear_dir(dir: &Path) -> std::io::Result<()> {
             fs::remove_dir_all(&path)?;
         } else {
             fs::remove_file(&path)?;
-        }
-    }
-    Ok(())
-}
-
-/// Recursively copies the contents of `src` into `dst`.
-///
-/// Gradle-regenerated directories (`.gradle`, `build`, `.kotlin`) are
-/// skipped: they are locked while a build is running — which used to make
-/// the whole copy fail — and they are large, regenerable caches/artifacts.
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let dest = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            let name = entry.file_name();
-            if matches!(name.to_string_lossy().as_ref(), ".gradle" | "build" | ".kotlin") {
-                continue;
-            }
-            copy_dir_all(&entry.path(), &dest)?;
-        } else {
-            fs::copy(entry.path(), &dest)?;
         }
     }
     Ok(())

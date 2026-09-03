@@ -162,25 +162,52 @@ pub fn remove_output_file(
     Ok(list)
 }
 
-/// Copies one artifact file to a destination chosen in the frontend.
-/// Runs on the async thread pool: artifacts can be large apk files whose
-/// copy would otherwise freeze the main thread.
+/// Copies one artifact file to the Windows clipboard as a file object
+/// (exactly like Explorer's 复制): the user can then paste it anywhere
+/// with Ctrl+V. Uses the WinForms SetFileDropList API (real CF_HDROP) —
+/// PowerShell 5.1's Set-Clipboard cannot place files, only text. Runs on
+/// the async thread pool (process spawn must never block the main thread).
 #[tauri::command]
-pub async fn copy_output_file(app: tauri::AppHandle, src: String, dest: String) -> Result<(), String> {
+pub async fn copy_output_file(app: tauri::AppHandle, path: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let src = PathBuf::from(src.trim());
-        let dest = PathBuf::from(dest.trim());
-        if !src.is_file() {
+        let path = path.trim().to_string();
+        if path.is_empty() {
+            return Err("文件路径为空".to_string());
+        }
+        if !Path::new(&path).is_file() {
             return Err("产出文件不存在，可能已被移动或删除".to_string());
         }
-        if dest.as_os_str().is_empty() {
-            return Err("请选择复制目标".to_string());
+        // Single quotes inside the path are doubled for the PS literal.
+        let escaped = path.replace('\'', "''");
+        // SetFileDropList flushes to the OS clipboard, so the content
+        // survives the short-lived PowerShell process; the trailing
+        // Get-Clipboard check verifies the file drop actually landed.
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $files = New-Object System.Collections.Specialized.StringCollection; \
+             $files.Add('{escaped}'); \
+             [System.Windows.Forms.Clipboard]::SetFileDropList($files); \
+             if (-not (Get-Clipboard -Format FileDropList)) {{ throw 'clipboard has no file drop' }}"
+        );
+        #[allow(unused_mut)]
+        let mut cmd = std::process::Command::new("powershell");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        if let Some(dir) = dest.parent() {
-            fs::create_dir_all(dir).map_err(|e| format!("无法创建目标目录：{e}"))?;
+        let output = cmd
+            .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", &script])
+            .output()
+            .map_err(|e| format!("无法执行剪贴板命令：{e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "复制到剪贴板失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
         }
-        fs::copy(&src, &dest).map_err(|e| format!("复制文件失败：{e}"))?;
-        let name = src
+        let name = Path::new(&path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -188,8 +215,8 @@ pub async fn copy_output_file(app: tauri::AppHandle, src: String, dest: String) 
             &app,
             "output",
             "modify",
-            "复制产出文件",
-            &format!("目标：{}", dest.display()),
+            "复制产出文件到剪贴板",
+            "可在资源管理器等位置直接粘贴",
             vec![name],
         );
         Ok(())

@@ -55,7 +55,8 @@ export async function removeOutputFile(
   return invoke<OutputRecord[]>("remove_output_file", { uuid, filePath })
 }
 
-/** Copies one artifact file to `dest` (picked through a save dialog). */
-export async function copyOutputFile(src: string, dest: string): Promise<void> {
-  return invoke("copy_output_file", { src, dest })
+/** Copies one artifact file to the Windows clipboard as a file object
+ * (like Explorer's copy) — paste it anywhere with Ctrl+V. */
+export async function copyOutputFile(path: string): Promise<void> {
+  return invoke("copy_output_file", { path })
 }

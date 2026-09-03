@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, Cog, Loader2, Pencil, Rocket, Trash2 } from "lucide-vue-next"
+import { ChevronRight, Cog, Loader2, Pencil, RefreshCw, Rocket, Trash2 } from "lucide-vue-next"
 import { computed, ref } from "vue"
 import ParameterCard from "./ParameterCard.vue"
 import type { ConfigProject } from "@/lib/config"
@@ -12,12 +12,17 @@ const props = defineProps<{
   selected?: boolean
   /** True while the launch (kernel injection) action is running. */
   executing?: boolean
+  /** True while the refresh (reload from local files) action is running. */
+  refreshing?: boolean
+  /** Bumped to force the expanded ParameterCard to reload from disk. */
+  refreshTick?: number
 }>()
 
 const emit = defineEmits<{
   edit: []
   execute: []
   delete: []
+  refresh: []
   "toggle-select": []
   contextmenu: [event: MouseEvent]
 }>()
@@ -119,6 +124,17 @@ const sourceMeta = computed(() =>
         <button
           type="button"
           class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="refreshing"
+          aria-label="刷新项目数据"
+          title="刷新：实时从本地文件重新读取项目数据与参数"
+          @click.stop="emit('refresh')"
+        >
+          <Loader2 v-if="refreshing" class="size-3 animate-spin" />
+          <RefreshCw v-else class="size-3" />
+        </button>
+        <button
+          type="button"
+          class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-muted/60 transition-colors duration-200 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="executing"
           aria-label="启动配置注入"
           title="启动：复制模板代码并执行参数/代码内核注入"
@@ -181,7 +197,7 @@ const sourceMeta = computed(() =>
         @click.stop
       >
         <p class="text-[clamp(11px,1.2vw,12px)] font-semibold">参数卡片</p>
-        <ParameterCard :project="project" />
+        <ParameterCard :project="project" :refresh-tick="refreshTick" />
       </div>
     </div>
   </div>

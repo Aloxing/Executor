@@ -185,17 +185,12 @@ async function confirmDelete() {
 
 // --- Copy artifact file ----------------------------------------------------------
 
-// Copies one artifact to a destination picked through a save dialog.
+// Copies one artifact to the Windows clipboard (Explorer-style copy);
+// the user pastes it anywhere with Ctrl+V.
 async function onCopyFile(file: OutputFile) {
   try {
-    const { save } = await import("@tauri-apps/plugin-dialog")
-    const dest = await save({
-      title: "复制产出文件",
-      defaultPath: file.name,
-    })
-    if (!dest) return
-    await copyOutputFile(file.path, dest)
-    showToast(`已复制到 ${dest}`, "success")
+    await copyOutputFile(file.path)
+    showToast(`已复制「${file.name}」到剪贴板，可在资源管理器中粘贴`, "success")
   } catch (e) {
     showToast(typeof e === "string" ? e : "复制失败")
   }
@@ -388,6 +383,8 @@ onActivated(reload)
       v-if="pendingDelete"
       :title="confirmMeta.title"
       :message="confirmMeta.message"
+      confirm-label="删除"
+      danger
       :busy="deleting"
       @cancel="pendingDelete = null"
       @confirm="confirmDelete"

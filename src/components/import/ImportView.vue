@@ -74,6 +74,8 @@ const selectedProjects = ref<Set<string>>(new Set())
 const confirm = ref<{
   title: string
   message: string
+  confirmLabel?: string
+  danger?: boolean
   run: () => Promise<void>
 } | null>(null)
 const confirming = ref(false)
@@ -196,6 +198,8 @@ function onDeleteQueue(queue: ImportQueue) {
   confirm.value = {
     title: "删除队列",
     message: `确定删除队列「${queue.name}」吗？队列下的项目会保留在项目目录中，删除后不可恢复。`,
+    confirmLabel: "删除",
+    danger: true,
     run: async () => {
       await deleteQueues([queue.uuid])
       await reload()
@@ -211,6 +215,8 @@ function requestBatchDelete() {
     confirm.value = {
       title: "批量删除队列",
       message: `确定删除所选 ${uuids.length} 个队列吗？队列下的项目会保留在项目目录中，删除后不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
       run: async () => {
         await deleteQueues(uuids)
         exitSelectMode()
@@ -224,6 +230,8 @@ function requestBatchDelete() {
     confirm.value = {
       title: "批量删除项目",
       message: `确定删除所选 ${names.length} 个项目吗？对应的包名文件夹也会一并删除，删除后不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
       run: async () => {
         await deleteAndroidProjects(names)
         exitSelectMode()
@@ -720,6 +728,8 @@ async function onTransferToConfig() {
       v-if="confirm"
       :title="confirm.title"
       :message="confirm.message"
+      :confirm-label="confirm.confirmLabel"
+      :danger="confirm.danger"
       :busy="confirming"
       @cancel="confirm = null"
       @confirm="runConfirm"

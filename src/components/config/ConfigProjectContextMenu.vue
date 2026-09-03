@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FolderDown, LayoutTemplate, MapPin, RefreshCw } from "lucide-vue-next"
+import { FolderDown, FileCode, LayoutTemplate, MapPin, RefreshCw } from "lucide-vue-next"
 import { computed } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
 import type { ConfigProject } from "@/lib/config"
@@ -16,12 +16,13 @@ const emit = defineEmits<{
   record: []
   locate: []
   "reload-project": []
+  "reset-code": []
 }>()
 
-// Keep the menu inside the viewport (approximate menu size 220x170).
+// Keep the menu inside the viewport (approximate menu size 220x210).
 const position = computed(() => ({
   left: `${Math.max(4, Math.min(props.x, window.innerWidth - 230))}px`,
-  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 180))}px`,
+  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 220))}px`,
 }))
 
 // Closing is driven by the central shortcut system (Esc by default).
@@ -72,6 +73,19 @@ useShortcut("close", () => emit("close"))
       >
         <RefreshCw class="size-3.5 shrink-0" />
         重载项目（保留参数）
+      </button>
+      <!-- Overwrite the project files with the template's code folder;
+           parameters and kernels are not touched. -->
+      <button
+        v-if="project.templateName && project.recorded"
+        type="button"
+        role="menuitem"
+        class="hover:bg-accent hover:text-accent-foreground flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="用模板 code 目录的内容覆盖项目配置目录中的同名文件（参数 JSON 不受影响，不执行内核）"
+        @click="emit('reset-code')"
+      >
+        <FileCode class="size-3.5 shrink-0" />
+        从模板重置代码
       </button>
       <button
         type="button"

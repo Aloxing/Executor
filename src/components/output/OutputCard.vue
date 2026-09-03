@@ -152,7 +152,7 @@ function onClick() {
           type="button"
           class="hover:bg-muted text-muted-foreground hover:text-foreground inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md bg-transparent transition-colors duration-200 focus-visible:outline-none"
           aria-label="复制文件"
-          title="复制文件到…"
+          title="复制文件到剪贴板（可在资源管理器中粘贴）"
           @click.stop="emit('copy-file', file)"
         >
           <Copy class="size-3" />

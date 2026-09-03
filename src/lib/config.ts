@@ -142,6 +142,13 @@ export async function startConfigProject(
   })
 }
 
+/** 从模板重置代码: overwrites the project's files with the template's
+ * `code` folder contents; parameter JSON untouched, no kernel runs.
+ * Resolves to a user-facing Chinese summary. */
+export async function resetProjectCode(projectUuid: string): Promise<string> {
+  return invoke<string>("reset_project_code", { projectUuid })
+}
+
 /** Deletes queues by uuid; works for single and batch deletion. The
  * embedded project records are removed with their queue; copied folders
  * are kept. */

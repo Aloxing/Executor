@@ -6,6 +6,8 @@ defineProps<{
   title: string
   message: string
   confirmLabel?: string
+  /** Destructive actions (real deletions) get the red confirm button. */
+  danger?: boolean
   busy?: boolean
 }>()
 
@@ -55,11 +57,16 @@ useShortcut("close", () => emit("cancel"))
         </button>
         <button
           type="button"
-          class="text-destructive hover:bg-destructive/10 inline-flex h-8 min-w-[80px] cursor-pointer items-center justify-center rounded-lg bg-destructive/5 px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:opacity-50"
+          class="inline-flex h-8 min-w-[80px] cursor-pointer items-center justify-center rounded-lg px-3 text-[clamp(11px,1.25vw,13px)] font-medium transition-colors duration-200 focus-visible:outline-none disabled:opacity-50"
+          :class="
+            danger
+              ? 'text-destructive hover:bg-destructive/10 bg-destructive/5'
+              : 'bg-primary text-primary-foreground hover:bg-primary/90'
+          "
           :disabled="busy"
           @click="emit('confirm')"
         >
-          {{ confirmLabel ?? "删除" }}
+          {{ confirmLabel ?? "确认" }}
         </button>
       </div>
     </div>

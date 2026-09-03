@@ -358,6 +358,8 @@ onActivated(reload)
       v-if="pendingDelete"
       :title="confirmMeta.title"
       :message="confirmMeta.message"
+      confirm-label="删除"
+      danger
       :busy="deleting"
       @cancel="pendingDelete = null"
       @confirm="confirmDelete"

@@ -28,6 +28,7 @@ import {
   recordConfigProject,
   reloadConfigProject,
   removeConfigProject,
+  resetProjectCode,
   saveConfigTemplate,
   startConfigProject,
   type ConfigProject,
@@ -81,6 +82,10 @@ const removing = ref(false)
 // one currently executing drives the card's loading state.
 const pendingExecute = ref<ConfigProject | null>(null)
 const executingUuid = ref("")
+// Directory card currently reloading its data from the local files.
+const refreshingUuid = ref("")
+// Per-project tick that forces the expanded ParameterCard to reload.
+const paramRefreshTicks = ref<Record<string, number>>({})
 // True while the disk directory dialog/attach is running.
 const attachingDisk = ref(false)
 // Naming modal state after picking a directory from disk.
@@ -111,6 +116,8 @@ const selectedProjects = ref<Set<string>>(new Set())
 const confirm = ref<{
   title: string
   message: string
+  confirmLabel?: string
+  danger?: boolean
   run: () => Promise<void>
 } | null>(null)
 const confirming = ref(false)
@@ -300,6 +307,8 @@ function onDeleteQueue(queue: ConfigQueue) {
   confirm.value = {
     title: "删除队列",
     message: `确定删除队列「${queue.name}」吗？队列下的项目会随队列删除（已复制的文件保留），删除后不可恢复。`,
+    confirmLabel: "删除",
+    danger: true,
     run: async () => {
       await deleteConfigQueues([queue.uuid])
       await reload()
@@ -322,6 +331,8 @@ function requestBatchDelete() {
     confirm.value = {
       title: "批量删除队列",
       message: `确定删除所选 ${uuids.length} 个队列吗？队列下的项目会随队列删除（已复制的文件保留），删除后不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
       run: async () => {
         await deleteConfigQueues(uuids)
         exitSelectMode()
@@ -335,6 +346,8 @@ function requestBatchDelete() {
     confirm.value = {
       title: "批量删除项目",
       message: `确定删除所选 ${uuids.length} 个项目吗？配置区复制目录与包名参数文件将一并清理（导入区与磁盘源文件不受影响），删除后不可恢复。`,
+      confirmLabel: "删除",
+      danger: true,
       run: async () => {
         await deleteConfigProjects(uuids)
         exitSelectMode()
@@ -364,6 +377,8 @@ function onDeleteDirectoryProject(project: ConfigProject) {
   confirm.value = {
     title: "删除项目",
     message: `确定删除项目「${project.name}」吗？配置区复制目录与包名参数文件将一并清理（导入区与磁盘源文件不受影响），删除后不可恢复。`,
+    confirmLabel: "删除",
+    danger: true,
     run: async () => {
       await deleteConfigProjects([project.uuid])
       await reload()
@@ -644,11 +659,50 @@ function onReloadProject(queue: ConfigQueue, project: ConfigProject) {
   confirm.value = {
     title: "重载项目（保留参数）",
     message: `确定重载项目「${project.name}」吗？配置目录下已复制的项目文件将被删除并从导入区重新复制；参数 JSON 与模板选择保留，模板代码将在下次启动时重新复制。`,
+    confirmLabel: "重载",
     run: async () => {
       const updated = await reloadConfigProject(queue.uuid, project.uuid)
       replaceQueue(updated)
       showToast(`项目「${project.name}」已重新在导入区加载`, "success")
     },
+  }
+}
+
+// 从模板重置代码: overwrite the project's files with the template's
+// code folder contents; parameter JSON untouched and no kernel runs.
+function onResetCode(project: ConfigProject) {
+  projectMenu.value = null
+  confirm.value = {
+    title: "从模板重置代码",
+    confirmLabel: "重置",
+    message: `确定重置项目「${project.name}」的代码吗？将用模板「${
+      project.templateName ?? ""
+    }」code 目录的内容覆盖项目配置目录中的同名文件（参数 JSON 不受影响，不执行内核注入）。`,
+    run: async () => {
+      const summary = await resetProjectCode(project.uuid)
+      await reload()
+      showToast(summary, "success")
+    },
+  }
+}
+
+// 刷新: re-read this project's data from the local files in real time —
+// queues.json for the card, and the parameter JSON when the card is
+// expanded (its ParameterCard reloads through the refresh tick).
+async function onRefreshDirectoryProject(project: ConfigProject) {
+  if (refreshingUuid.value) return
+  refreshingUuid.value = project.uuid
+  try {
+    await reload()
+    paramRefreshTicks.value = {
+      ...paramRefreshTicks.value,
+      [project.uuid]: (paramRefreshTicks.value[project.uuid] ?? 0) + 1,
+    }
+    showToast(`项目「${project.name}」已从本地文件刷新`, "success")
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "刷新失败，请重试")
+  } finally {
+    refreshingUuid.value = ""
   }
 }
 
@@ -868,9 +922,12 @@ async function onRecordAll() {
               :select-mode="selectTarget === 'projects'"
               :selected="selectedProjects.has(project.uuid)"
               :executing="executingUuid === project.uuid"
+              :refreshing="refreshingUuid === project.uuid"
+              :refresh-tick="paramRefreshTicks[project.uuid] ?? 0"
               @edit="onEditDirectoryProject(project)"
               @execute="onExecuteProject(project)"
               @delete="onDeleteDirectoryProject(project)"
+              @refresh="onRefreshDirectoryProject(project)"
               @toggle-select="toggleProject(project.uuid)"
               @contextmenu="onDirectoryProjectContextMenu(project, $event)"
             />
@@ -928,6 +985,7 @@ async function onRecordAll() {
       @reload-project="
         onReloadProject(projectMenu.queue, projectMenu.project)
       "
+      @reset-code="onResetCode(projectMenu.project)"
     />
     <SelectTemplateModal
       v-if="templateTarget || batchTemplateQueue"
@@ -953,6 +1011,8 @@ async function onRecordAll() {
       v-if="confirm"
       :title="confirm.title"
       :message="confirm.message"
+      :confirm-label="confirm.confirmLabel"
+      :danger="confirm.danger"
       :busy="confirming"
       @cancel="confirm = null"
       @confirm="runConfirm"
@@ -961,6 +1021,8 @@ async function onRecordAll() {
       v-if="pendingRemove"
       title="从队列删除卡片"
       :message="`确定将项目「${pendingRemove.project.name}」从队列「${pendingRemove.queue.name}」中删除吗？项目文件不会被删除。`"
+      confirm-label="删除"
+      danger
       :busy="removing"
       @cancel="pendingRemove = null"
       @confirm="confirmRemove"

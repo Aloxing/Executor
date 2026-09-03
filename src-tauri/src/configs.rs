@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
+use crate::common::storage::copy_dir_complete;
 use crate::core::android::{argument, code};
 use crate::core::settings::read_settings;
 
@@ -162,29 +163,6 @@ fn is_duplicate(queue: &ConfigQueue, project: &ConfigProject) -> bool {
             _ => existing.name == project.name,
         },
     })
-}
-
-/// Recursively copies the contents of `src` into `dst`.
-///
-/// Gradle-regenerated directories (`.gradle`, `build`, `.kotlin`) are
-/// skipped: they are locked while a build is running — which used to make
-/// the whole copy fail — and they are large, regenerable caches/artifacts.
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let dest = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            let name = entry.file_name();
-            if matches!(name.to_string_lossy().as_ref(), ".gradle" | "build" | ".kotlin") {
-                continue;
-            }
-            copy_dir_all(&entry.path(), &dest)?;
-        } else {
-            fs::copy(entry.path(), &dest)?;
-        }
-    }
-    Ok(())
 }
 
 /// Imported projects: record-only at attach time; the content copy into
@@ -364,8 +342,11 @@ fn record_project(app: &tauri::AppHandle, project: &mut ConfigProject) -> Result
     if target.is_dir() {
         fs::remove_dir_all(&target).map_err(|e| format!("清空配置目录失败：{e}"))?;
     }
-    copy_dir_all(&source, &target)
-        .map_err(|e| format!("记录项目「{}」的内容失败：{e}", project.name))?;
+    if let Err(e) = copy_dir_complete(&source, &target) {
+        // Never leave a half-copied config folder behind.
+        let _ = fs::remove_dir_all(&target);
+        return Err(format!("记录项目「{}」的内容失败：{e}", project.name));
+    }
     project.recorded = true;
     // The config directory was rebuilt, so the template's code copy is
     // stale and the next launch must copy it again.
@@ -599,8 +580,9 @@ fn copy_parameter_file(
     }
     let target_dir = config_dir(app)?.join("parameter");
     fs::create_dir_all(&target_dir).map_err(|e| format!("无法创建参数目录：{e}"))?;
-    fs::copy(&source, target_dir.join(format!("{package_name}.json")))
-        .map_err(|e| format!("复制参数文件失败：{e}"))?;
+    let dest = target_dir.join(format!("{package_name}.json"));
+    fs::copy(&source, &dest).map_err(|e| format!("复制参数文件失败：{e}"))?;
+    crate::common::storage::verify_file_copy(&source, &dest)?;
     Ok(())
 }
 
@@ -764,7 +746,7 @@ fn run_execute_project(app: &tauri::AppHandle, project_uuid: &str) -> Result<Str
         if !code_source.is_dir() {
             return Err(format!("模板「{template_name}」没有 code 文件夹，无法完善配置"));
         }
-        copy_dir_all(&code_source, &project_root)
+        copy_dir_complete(&code_source, &project_root)
             .map_err(|e| format!("复制模板 code 内容失败：{e}"))?;
         if let Some(target) = list
             .iter_mut()
@@ -816,6 +798,67 @@ fn run_execute_project(app: &tauri::AppHandle, project_uuid: &str) -> Result<Str
         vec![project.name.clone()],
     );
     Ok(summary)
+}
+
+/// 从模板重置代码: re-copies the selected template's `code` folder into
+/// the project's config directory, overwriting same-name files only.
+/// The parameter JSON is not touched and no kernel runs; requires a
+/// recorded project so the source directories are never polluted.
+#[tauri::command]
+pub fn reset_project_code(app: tauri::AppHandle, project_uuid: String) -> Result<String, String> {
+    let project_uuid = project_uuid.trim().to_string();
+    let mut list = load_queues(&app)?;
+    let (template_name, root_path, project_name) = {
+        let project = list
+            .iter()
+            .flat_map(|q| q.projects.iter())
+            .find(|p| p.uuid == project_uuid)
+            .ok_or_else(|| "未找到项目".to_string())?;
+        let template = project
+            .template_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "项目尚未选择配置模板".to_string())?;
+        if !project.recorded {
+            return Err("项目尚未记录，请先记录项目再重置代码".to_string());
+        }
+        (template, project.root_path.clone(), project.name.clone())
+    };
+    let root = PathBuf::from(root_path.trim());
+    if !root.is_dir() {
+        return Err(format!("项目目录不存在：{}", root.display()));
+    }
+    let code_source = workspace_dir(&app)?
+        .join("templates")
+        .join(&template_name)
+        .join("code");
+    if !code_source.is_dir() {
+        return Err(format!(
+            "模板「{template_name}」没有 code 文件夹，无法重置代码"
+        ));
+    }
+    copy_dir_complete(&code_source, &root)
+        .map_err(|e| format!("复制模板 code 内容失败：{e}"))?;
+    // The copy is fresh again.
+    if let Some(project) = list
+        .iter_mut()
+        .flat_map(|q| q.projects.iter_mut())
+        .find(|p| p.uuid == project_uuid)
+    {
+        project.code_copied = true;
+    }
+    save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "config",
+        "modify",
+        "从模板重置代码",
+        &format!("模板：{template_name}"),
+        vec![project_name],
+    );
+    Ok(format!(
+        "已用模板「{template_name}」的 code 内容覆盖项目文件"
+    ))
 }
 
 /// Marks a sub project as configured (已配置) and records the start
@@ -1015,8 +1058,11 @@ fn run_reload_project(
     if target.is_dir() {
         fs::remove_dir_all(&target).map_err(|e| format!("清空配置目录失败：{e}"))?;
     }
-    copy_dir_all(&source, &target)
-        .map_err(|e| format!("重新加载包名「{package_name}」的内容失败：{e}"))?;
+    if let Err(e) = copy_dir_complete(&source, &target) {
+        // Never leave a half-copied config folder behind.
+        let _ = fs::remove_dir_all(&target);
+        return Err(format!("重新加载包名「{package_name}」的内容失败：{e}"));
+    }
     {
         let project = find_project_mut(&mut list, queue_uuid, project_uuid)?;
         // The config directory was rebuilt, so the template's code copy
