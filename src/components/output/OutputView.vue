@@ -19,6 +19,7 @@ import {
   listAndroidDevices,
   type AndroidDevice,
 } from "@/lib/devices"
+import { notifySystem } from "@/lib/notify"
 import { byCreatedAt } from "@/lib/queues"
 import { useShortcut } from "@/lib/shortcuts"
 import { showToast } from "@/lib/toast"
@@ -180,12 +181,21 @@ async function confirmDelete() {
           : `已删除 ${uuids.length} 个产出卡片及其文件`,
         "success"
       )
+      // 真删文件，不可恢复，属于重要结果。
+      notifySystem(
+        "产出删除完成",
+        pending.kind === "card"
+          ? `「${pending.record.projectName}」的产出卡片及其文件已真删除`
+          : `已真删除 ${uuids.length} 个产出卡片及其文件`
+      )
       if (pending.kind === "batch") exitSelectMode()
       await reload()
     }
     pendingDelete.value = null
   } catch (e) {
-    showToast(typeof e === "string" ? e : "删除失败，请重试")
+    const message = typeof e === "string" ? e : "删除失败，请重试"
+    showToast(message)
+    notifySystem("产出删除失败", message)
   } finally {
     deleting.value = false
   }

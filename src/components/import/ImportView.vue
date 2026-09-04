@@ -20,6 +20,7 @@ import {
   listAndroidProjects,
   type AndroidProject,
 } from "@/lib/android"
+import { notifySystem } from "@/lib/notify"
 import { byCreatedAt, deleteQueues, listImportQueues, type ImportQueue } from "@/lib/queues"
 import { generateUuid } from "@/lib/queues"
 import {
@@ -224,6 +225,7 @@ function requestBatchDelete() {
         exitSelectMode()
         await reload()
         showToast("所选队列已删除", "success")
+        notifySystem("批量删除完成", `已删除 ${uuids.length} 个导入队列`)
       },
     }
   } else {
@@ -239,6 +241,10 @@ function requestBatchDelete() {
         exitSelectMode()
         await reload()
         showToast("所选项目已删除", "success")
+        notifySystem(
+          "批量删除完成",
+          `已删除 ${names.length} 个导入项目及其包名文件夹`
+        )
       },
     }
   }
@@ -359,8 +365,14 @@ async function onImport(queue: ImportQueue) {
   try {
     await importAndroidProjects(queue.uuid)
     showToast(`队列「${queue.name}」记录完成`, "success")
+    notifySystem(
+      "记录完成",
+      `队列「${queue.name}」项目内容已复制到导入区`
+    )
   } catch (e) {
-    showToast(typeof e === "string" ? e : "记录失败，请重试")
+    const message = typeof e === "string" ? e : "记录失败，请重试"
+    showToast(message)
+    notifySystem("记录失败", `队列「${queue.name}」：${message}`)
   } finally {
     importingUuid.value = ""
     await reload()
@@ -377,7 +389,14 @@ async function onRecordProject() {
   try {
     await importAndroidProject(target.project.packageName)
     showToast(`项目「${target.project.appName}」记录完成`, "success")
-  } catch (e) {    showToast(typeof e === "string" ? e : "记录失败，请重试")
+    notifySystem(
+      "记录完成",
+      `项目「${target.project.appName}」内容已复制到导入区`
+    )
+  } catch (e) {
+    const message = typeof e === "string" ? e : "记录失败，请重试"
+    showToast(message)
+    notifySystem("记录失败", `「${target.project.appName}」：${message}`)
   } finally {
     importingUuid.value = ""
     await reload()

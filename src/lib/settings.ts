@@ -17,6 +17,10 @@ export interface AppSettings {
   /** Customized shortcut combos per action id; defaults live in
    * `lib/shortcuts.ts`. An empty string unbinds an action. */
   shortcuts: Record<string, string>
+  /** Also raise a Windows system notification for the important results
+   * (long builds, batch configuration, bulk deletions…). In-app toasts are
+   * shown either way. */
+  systemNotify: boolean
 }
 
 const defaults: AppSettings = {
@@ -25,6 +29,7 @@ const defaults: AppSettings = {
   themeMode: "system",
   gradleEnvs: [],
   shortcuts: {},
+  systemNotify: true,
 }
 
 export const settings = reactive<AppSettings>({ ...defaults })
@@ -53,6 +58,9 @@ export async function loadSettings(): Promise<void> {
       loaded.shortcuts && typeof loaded.shortcuts === "object"
         ? { ...loaded.shortcuts }
         : {}
+    // Settings written before the option existed lack the field.
+    settings.systemNotify =
+      typeof loaded.systemNotify === "boolean" ? loaded.systemNotify : true
   } catch {
     // Not running inside Tauri; keep defaults.
   }
@@ -67,6 +75,7 @@ export async function saveSettings(): Promise<void> {
         themeMode: settings.themeMode,
         gradleEnvs: settings.gradleEnvs,
         shortcuts: settings.shortcuts,
+        systemNotify: settings.systemNotify,
       },
     })
   } catch {

@@ -1,15 +1,37 @@
 <script setup lang="ts">
-import { Calendar, FileUp, Loader2, Plus, Save, Trash2, X } from "lucide-vue-next"
+import {
+  Calendar,
+  CircleCheck,
+  CodeXml,
+  FileUp,
+  ListTree,
+  Loader2,
+  Plus,
+  Save,
+  Trash2,
+  TriangleAlert,
+  X,
+} from "lucide-vue-next"
 import { computed, onMounted, ref, watch } from "vue"
 import AppSelect from "../AppSelect.vue"
 import CalendarPicker from "../import/CalendarPicker.vue"
 import SettingSwitch from "../settings/SettingSwitch.vue"
+import SceneCodeEditor from "./SceneCodeEditor.vue"
 import { useShortcut } from "@/lib/shortcuts"
 import {
   readProjectParameter,
   writeProjectParameter,
   type ConfigProject,
 } from "@/lib/config"
+import {
+  applyScenes,
+  argsText,
+  effectiveLogTag,
+  generateScenesCode,
+  parseArgs,
+  parseScenesCode,
+  unsupportedStatements,
+} from "@/lib/sceneCode"
 import { showToast } from "@/lib/toast"
 
 const props = defineProps<{
@@ -66,6 +88,8 @@ async function load() {
     original.value = JSON.stringify(doc.value)
     initDateDefaults()
     editingArgs.value = null
+    // 函数组合区默认就是代码模式：文档重载后按最新 JSON 重新生成草稿。
+    enterDefaultCodeMode()
   } catch (e) {
     error.value =
       typeof e === "string" ? e : e instanceof Error ? e.message : "读取参数失败"
@@ -299,49 +323,8 @@ function setStatementType(
   }
 }
 
-// Args are comma-separated tokens: quoted tokens are strings, pure
-// numbers stay numbers, and bare identifiers are variables (stored as
-// {"var": name}, rendered without quotes by the code kernel).
-function renderArgToken(arg: unknown): string {
-  if (arg !== null && typeof arg === "object" && "var" in arg) {
-    return String((arg as { var: unknown }).var ?? "")
-  }
-  if (typeof arg === "string") return `"${arg}"`
-  return String(arg)
-}
-
-function argsText(args: unknown): string {
-  return Array.isArray(args) ? args.map(renderArgToken).join(",") : ""
-}
-
-function parseArgs(text: string): unknown[] {
-  if (!text) return []
-  const tokens: unknown[] = []
-  for (const raw of text.split(",")) {
-    const trimmed = raw.trim()
-    // Empty tokens mean the argument was deleted; drop them so the input
-    // never bounces back to a re-rendered "" (type two quotes for a real
-    // empty-string argument).
-    if (!trimmed) continue
-    // Quoted tokens are strings.
-    if (
-      trimmed.length >= 2 &&
-      ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-        (trimmed.startsWith("'") && trimmed.endsWith("'")))
-    ) {
-      tokens.push(trimmed.slice(1, -1))
-      continue
-    }
-    // Pure numbers render without quotes.
-    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-      tokens.push(Number(trimmed))
-      continue
-    }
-    // Bare identifiers are variables.
-    tokens.push({ var: trimmed })
-  }
-  return tokens
-}
+// Argument tokens (rendering and parsing) live in lib/sceneCode.ts so the
+// 实参 inputs and the 代码模式 preview share one serialization.
 
 // ruled statements have rule args; every statement also has callback call
 // args (both are comma-separated token lists; numbers stay numbers).
@@ -401,6 +384,107 @@ function onArgsInput(
 
 function onArgsBlur() {
   editingArgs.value = null
+}
+
+// --- 代码模式：scenes ⇄ 等价 Java 方法 --------------------------------------
+
+// Per code entry: whether the editor replaces the form, the editor text,
+// and the lines that could not be mapped back into the JSON.
+const codeMode = ref<Record<string, boolean>>({})
+const codeDraft = ref<Record<string, string>>({})
+const codeIssues = ref<Record<string, string[]>>({})
+
+function isCodeMode(codeName: string): boolean {
+  return !!codeMode.value[codeName]
+}
+
+/** Parse issues of one code entry (empty while everything maps back). */
+function issuesOf(codeName: string): string[] {
+  return codeIssues.value[codeName] ?? []
+}
+
+/** Statements without a Java form (the kernel skips them); editing their
+ * function in code mode drops them, so the mode warns about them. */
+function unsupportedOf(codeName: string): string[] {
+  return unsupportedStatements(doc.value?.[codeName])
+}
+
+// 代码模式 is the default presentation of the function composition area:
+// every code entry starts in the editor, and 组合模式 is the opt-in form.
+function enterDefaultCodeMode() {
+  codeMode.value = {}
+  codeDraft.value = {}
+  codeIssues.value = {}
+  for (const codeName of codeEntries.value) {
+    prepareCodeDraft(codeName)
+    codeMode.value[codeName] = true
+  }
+}
+
+/** Renders the entry's scenes as the exact Java source the code kernel
+ * would inject (same signature, same Log.i line, same order). */
+function prepareCodeDraft(codeName: string) {
+  codeDraft.value[codeName] = generateScenesCode(doc.value?.[codeName])
+  codeIssues.value[codeName] = []
+}
+
+/** User-facing switch into the mode; also warns about the statements that
+ * have no Java form and would be lost by editing their function. */
+function enterCodeMode(codeName: string) {
+  prepareCodeDraft(codeName)
+  codeMode.value[codeName] = true
+  const unsupported = unsupportedOf(codeName)
+  if (unsupported.length) {
+    showToast(
+      `${unsupported.length} 条语句类型不受支持（${unsupported[0]}），代码中无法呈现，编辑对应函数会丢失它们`
+    )
+  }
+}
+
+function exitCodeMode(codeName: string) {
+  codeMode.value[codeName] = false
+  const issues = codeIssues.value[codeName] ?? []
+  if (issues.length) {
+    showToast(
+      `有 ${issues.length} 处代码无法解析，JSON 保持上一次有效内容`,
+      "info"
+    )
+  }
+}
+
+// Every keystroke reparses the whole text. The JSON is rewritten only when
+// every line maps back to the schema, so a half-typed statement can never
+// corrupt the parameter file; the unresolved lines are reported instead.
+function onCodeInput(codeName: string, text: string) {
+  codeDraft.value[codeName] = text
+  syncFromCode(codeName)
+}
+
+function syncFromCode(codeName: string) {
+  const entry = doc.value?.[codeName]
+  if (!entry || typeof entry !== "object") return
+  const ruleTemplates =
+    entry.ruleTemplates && typeof entry.ruleTemplates === "object"
+      ? entry.ruleTemplates
+      : {}
+  const result = parseScenesCode(
+    codeDraft.value[codeName] ?? "",
+    ruleTemplates
+  )
+  codeIssues.value[codeName] = result.errors
+  if (result.errors.length) return
+
+  const scenes = entry.scenes
+  const existing =
+    scenes && typeof scenes === "object" && !Array.isArray(scenes) ? scenes : {}
+  const currentTag = effectiveLogTag(entry)
+  // The tag of the Log.i lines belongs to the entry, so editing it in code
+  // flows back; an absent tag keeps the kernel's default.
+  const logTag = result.logTag || currentTag
+  entry.scenes = applyScenes(existing, result, ruleTemplates, logTag)
+  if (result.logTag && result.logTag !== currentTag) {
+    entry.logTag = result.logTag
+  }
 }
 
 // value_override references another argument entry whose value overrides
@@ -681,15 +765,83 @@ async function save() {
           >
             函数组合
           </p>
-          <button
-            type="button"
-            class="hover:bg-muted inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-muted/60 px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none"
-            @click="addScene(codeName)"
-          >
-            <Plus class="size-2.5" />
-            新建函数
-          </button>
+          <div class="flex shrink-0 items-center gap-1">
+            <!-- 代码模式: the same scenes as editable Java methods -->
+            <button
+              type="button"
+              class="hover:bg-muted inline-flex h-6 cursor-pointer items-center gap-1 rounded-md bg-muted/60 px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+              :title="
+                isCodeMode(codeName)
+                  ? '回到函数组合表单（代码已回写到 JSON）'
+                  : '生成等价函数代码直接编辑，改动实时回写到 JSON'
+              "
+              @click="
+                isCodeMode(codeName)
+                  ? exitCodeMode(codeName)
+                  : enterCodeMode(codeName)
+              "
+            >
+              <ListTree v-if="isCodeMode(codeName)" class="size-2.5" />
+              <CodeXml v-else class="size-2.5" />
+              {{ isCodeMode(codeName) ? "组合模式" : "代码模式" }}
+            </button>
+            <button
+              v-if="!isCodeMode(codeName)"
+              type="button"
+              class="hover:bg-muted inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-muted/60 px-2 text-[clamp(9px,1vw,10px)] font-medium transition-colors duration-200 focus-visible:outline-none"
+              @click="addScene(codeName)"
+            >
+              <Plus class="size-2.5" />
+              新建函数
+            </button>
+          </div>
         </div>
+        <!-- 代码模式：编辑器 + 回写状态 -->
+        <template v-if="isCodeMode(codeName)">
+          <div class="h-[clamp(280px,46vh,560px)]">
+            <SceneCodeEditor
+              :model-value="codeDraft[codeName] ?? ''"
+              @update:model-value="onCodeInput(codeName, $event)"
+            />
+          </div>
+          <div
+            class="flex items-start gap-1 text-[clamp(8px,0.9vw,9px)]"
+            :class="
+              issuesOf(codeName).length
+                ? 'text-destructive'
+                : 'text-muted-foreground'
+            "
+            role="status"
+          >
+            <TriangleAlert
+              v-if="issuesOf(codeName).length"
+              class="mt-px size-2.5 shrink-0"
+            />
+            <CircleCheck v-else class="mt-px size-2.5 shrink-0" />
+            <span
+              v-if="issuesOf(codeName).length"
+              :title="issuesOf(codeName).join('\n')"
+            >
+              {{ issuesOf(codeName).length }} 处无法回写到 JSON：{{
+                issuesOf(codeName)[0]
+              }}{{ issuesOf(codeName).length > 1 ? " 等" : "" }}（JSON 保持上一次有效内容）
+            </span>
+            <span v-else>已按函数格式回写到 JSON（scenes）</span>
+          </div>
+          <p
+            v-if="unsupportedOf(codeName).length"
+            class="text-[clamp(8px,0.9vw,9px)] text-amber-600 dark:text-amber-500"
+            :title="unsupportedOf(codeName).join('\n')"
+          >
+            {{ unsupportedOf(codeName).length }} 条语句类型不受支持（非 direct / ruled），代码中无法呈现，编辑对应函数会丢失它们。
+          </p>
+          <p
+            class="text-muted-foreground text-[clamp(8px,0.9vw,9px)] leading-relaxed"
+          >
+            语句格式：callback(args);（direct）与 Class.method(ruleArgs, this::callback);（ruled，Class/method 取自 ruleTemplates）；Log.i 行由内核生成；return 表达式对应函数的 return 字段。
+          </p>
+        </template>
+        <template v-else>
         <p
           v-if="!Object.keys(scenesOf(codeName)).length"
           class="text-muted-foreground px-1 py-1 text-center text-[clamp(9px,1vw,10px)]"
@@ -873,6 +1025,7 @@ async function save() {
           </div>
         </template>
         </div>
+        </template>
       </div>
       <!-- Save (template reset moved to the card's context menu) -->
       <div class="flex items-center justify-end gap-2 pt-1">

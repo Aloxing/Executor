@@ -12,6 +12,7 @@ import DeviceLogModal from "./DeviceLogModal.vue"
 import PickConfiguredProjectModal from "./PickConfiguredProjectModal.vue"
 import {
   addBuildProject,
+  clearBuildQueue,
   deleteBuildQueues,
   getBuildLogsDir,
   listBuildQueues,
@@ -33,6 +34,7 @@ import {
   type AndroidDevice,
   type DeviceLogEvent,
 } from "@/lib/devices"
+import { notifySystem } from "@/lib/notify"
 import { byCreatedAt } from "@/lib/queues"
 import { settings } from "@/lib/settings"
 import { useShortcut } from "@/lib/shortcuts"
@@ -96,6 +98,9 @@ const buildAllQueue = ref<BuildQueue | null>(null)
 // Queue waiting for its delete confirmation.
 const pendingDeleteQueue = ref<BuildQueue | null>(null)
 const deletingQueue = ref(false)
+// Queue waiting for its clear confirmation.
+const pendingClearQueue = ref<BuildQueue | null>(null)
+const clearingQueue = ref(false)
 // Set when the user stops a build-all run so the loop breaks early.
 const stopRequested = ref(false)
 
@@ -525,19 +530,27 @@ function unmarkBuilding(uuid: string) {
 }
 
 // One project's build inside any flow; its log streams into its own page.
+// Resolves to whether the build succeeded. A build-all run passes
+// notify=false so the queue raises one summary notification instead of one
+// per project.
 async function runQueueProject(
   env: string,
   project: BuildProject,
-  args: string[]
-) {
+  args: string[],
+  notify = true
+): Promise<boolean> {
   ensureLog(project.uuid, project.name)
   markBuilding(project.uuid)
   try {
     await runProjectBuild(project.uuid, env, args)
+    if (notify) notifySystem("构建完成", `「${project.name}」构建成功`)
+    return true
   } catch (e) {
-    showToast(
+    const message =
       typeof e === "string" ? e : `「${project.name}」构建失败，请查看日志`
-    )
+    showToast(message)
+    if (notify) notifySystem("构建失败", message)
+    return false
   } finally {
     unmarkBuilding(project.uuid)
   }
@@ -582,6 +595,49 @@ async function confirmDeleteQueue() {
   }
 }
 
+// 清空队列: drops every project card of the queue while the queue itself
+// stays. A running build must be stopped first, so no card is pulled away
+// mid-build; project files are never touched.
+function openClearQueue() {
+  if (!menu.value) return
+  const queue = menu.value.queue
+  menu.value = null
+  if (!queue.projects.length) {
+    showToast(`队列「${queue.name}」下暂无项目`)
+    return
+  }
+  const building =
+    queueBuildingUuid.value === queue.uuid ||
+    queue.projects.some((project) => buildingUuids.value.has(project.uuid))
+  if (building) {
+    showToast("队列正在构建中，请先停止构建再清空")
+    return
+  }
+  pendingClearQueue.value = queue
+}
+
+async function confirmClearQueue() {
+  const queue = pendingClearQueue.value
+  if (!queue || clearingQueue.value) return
+  clearingQueue.value = true
+  // The cleared cards take their log pages with them (device pages stay).
+  const cleared = queue.projects.map((project) => project.uuid)
+  try {
+    const updated = await clearBuildQueue(queue.uuid)
+    replaceQueue(updated)
+    pendingClearQueue.value = null
+    for (const uuid of cleared) removeLog(uuid)
+    showToast(
+      `已清空队列「${queue.name}」，移除 ${cleared.length} 个项目卡片`,
+      "success"
+    )
+  } catch (e) {
+    showToast(typeof e === "string" ? e : "清空队列失败，请重试")
+  } finally {
+    clearingQueue.value = false
+  }
+}
+
 // 全部构建: the mode dialog picks the gradle command and whether the
 // queue builds serially (one after another) or in parallel (all at once).
 function openBuildAll() {
@@ -602,23 +658,38 @@ async function startBuildAll(args: string[], mode: "serial" | "parallel") {
   if (!env || buildingUuids.value.size || queueBuildingUuid.value) return
   queueBuildingUuid.value = queue.uuid
   stopRequested.value = false
+  const total = queue.projects.length
+  let executed = 0
+  let succeeded = 0
   if (mode === "parallel") {
     // Every project builds at the same time, each into its own log page.
-    await Promise.all(
-      queue.projects.map((project) => runQueueProject(env, project, args))
+    const results = await Promise.all(
+      queue.projects.map((project) => runQueueProject(env, project, args, false))
     )
+    executed = results.length
+    succeeded = results.filter((ok) => ok).length
   } else {
     for (const project of queue.projects) {
       if (stopRequested.value) {
         showToast("已停止队列构建", "info")
         break
       }
-      await runQueueProject(env, project, args)
+      executed++
+      if (await runQueueProject(env, project, args, false)) succeeded++
     }
   }
   queueBuildingUuid.value = ""
   stopRequested.value = false
   showToast(`队列「${queue.name}」构建流程执行完毕`, "success")
+  // One summary notification for the whole run.
+  const failed = executed - succeeded
+  const skipped = total - executed
+  notifySystem(
+    skipped ? "队列构建已停止" : "全部构建完成",
+    `队列「${queue.name}」：成功 ${succeeded} 个${
+      failed ? `，失败 ${failed} 个` : ""
+    }${skipped ? `，未执行 ${skipped} 个` : ""}`
+  )
 }
 
 // Stop the running build of one project (kills the whole process tree);
@@ -873,6 +944,7 @@ async function onStopProject(project: BuildProject) {
       @pick-config="openPickConfig"
       @pick-disk="pickFromDisk"
       @build-all-open="openBuildAll"
+      @clear-queue="openClearQueue"
       @delete-queue="openDeleteQueue"
     />
     <BuildModeModal
@@ -910,6 +982,16 @@ async function onStopProject(project: BuildProject) {
       :busy="removing"
       @cancel="pendingRemove = null"
       @confirm="confirmRemove"
+    />
+    <ConfirmDialog
+      v-if="pendingClearQueue"
+      title="清空构建队列"
+      :message="`确定清空队列「${pendingClearQueue.name}」下的全部 ${pendingClearQueue.projects.length} 个项目卡片吗？队列保留，仅移除卡片记录，项目文件不受影响。`"
+      confirm-label="清空"
+      danger
+      :busy="clearingQueue"
+      @cancel="pendingClearQueue = null"
+      @confirm="confirmClearQueue"
     />
     <ConfirmDialog
       v-if="pendingDeleteQueue"

@@ -192,8 +192,12 @@ const sourceMeta = computed(() =>
     <!-- Parameter card section: mounted on first expand, then only
          hidden, so unsaved edits survive collapsing -->
     <div v-if="paramLoaded" v-show="expanded && !selectMode" class="flex flex-col gap-1.5 pt-1">
+      <!-- cursor-auto/select-text: the card itself is cursor-pointer and
+           select-none (click it to expand), and both properties inherit —
+           without this reset the parameter inputs would show a hand cursor
+           and the code editor could not be selected. -->
       <div
-        class="bg-background/60 flex w-full flex-col gap-1.5 rounded-lg border border-border/60 px-2.5 py-2"
+        class="bg-background/60 flex w-full cursor-auto flex-col gap-1.5 rounded-lg border border-border/60 px-2.5 py-2 select-text"
         @click.stop
       >
         <p class="text-[clamp(11px,1.2vw,12px)] font-semibold">参数卡片</p>

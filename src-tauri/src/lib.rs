@@ -27,8 +27,9 @@ use android_projects::{
     update_android_project,
 };
 use builds::{
-    add_build_project, create_build_queue, delete_build_queues, get_build_logs_dir,
-    list_build_queues, remove_build_project, run_project_build, stop_project_build, BuildRegistry,
+    add_build_project, clear_build_queue, create_build_queue, delete_build_queues,
+    get_build_logs_dir, list_build_queues, remove_build_project, run_project_build,
+    stop_project_build, BuildRegistry,
 };
 use outputs::{copy_output_file, list_outputs, remove_output_file, remove_outputs};
 use devices::{
@@ -57,6 +58,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Windows system notifications for the important results (build
+        // finished, batch config, bulk delete…); the in-app toasts stay.
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             mark_window_handled,
             exit_app,
@@ -110,6 +114,7 @@ pub fn run() {
             create_build_queue,
             add_build_project,
             remove_build_project,
+            clear_build_queue,
             delete_build_queues,
             run_project_build,
             stop_project_build,

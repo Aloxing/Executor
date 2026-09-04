@@ -318,6 +318,34 @@ pub fn remove_build_project(
     Ok(updated)
 }
 
+/// Clears every project record of one queue; the queue itself is kept
+/// and nothing on disk is touched (build queues only record addresses).
+#[tauri::command]
+pub fn clear_build_queue(app: tauri::AppHandle, queue_uuid: String) -> Result<BuildQueue, String> {
+    let queue_uuid = queue_uuid.trim().to_string();
+    let mut list = load_queues(&app)?;
+    let queue = list
+        .iter_mut()
+        .find(|q| q.uuid == queue_uuid)
+        .ok_or_else(|| "未找到构建队列".to_string())?;
+    if queue.projects.is_empty() {
+        return Err("队列下暂无项目，无需清空".to_string());
+    }
+    let removed_names: Vec<String> = queue.projects.iter().map(|p| p.name.clone()).collect();
+    queue.projects.clear();
+    let updated = queue.clone();
+    save_queues(&app, &list)?;
+    crate::records::log_operation(
+        &app,
+        "build",
+        "delete",
+        "清空构建队列",
+        &format!("移除 {} 个项目卡片，项目文件不受影响", removed_names.len()),
+        removed_names,
+    );
+    Ok(updated)
+}
+
 /// Deletes build queues by uuid (single and batch share this command).
 /// Build queues only record project addresses, so nothing on disk is
 /// ever touched.

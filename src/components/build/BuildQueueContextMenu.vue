@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FolderOpen, PackageOpen, Play, Trash2 } from "lucide-vue-next"
+import { Eraser, FolderOpen, PackageOpen, Play, Trash2 } from "lucide-vue-next"
 import { computed } from "vue"
 import { useShortcut } from "@/lib/shortcuts"
 import type { BuildQueue } from "@/lib/build"
@@ -16,13 +16,15 @@ const emit = defineEmits<{
   "pick-disk": []
   /** Opens the build-mode dialog (command + serial/parallel). */
   "build-all-open": []
+  /** Removes every project card of the queue, keeping the queue itself. */
+  "clear-queue": []
   "delete-queue": []
 }>()
 
-// Keep the menu inside the viewport (approximate menu size 230x210).
+// Keep the menu inside the viewport (approximate menu size 230x250).
 const position = computed(() => ({
   left: `${Math.max(4, Math.min(props.x, window.innerWidth - 240))}px`,
-  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 220))}px`,
+  top: `${Math.max(4, Math.min(props.y, window.innerHeight - 260))}px`,
 }))
 
 // Closing is driven by the central shortcut system (Esc by default).
@@ -74,6 +76,16 @@ useShortcut("close", () => emit("close"))
         全部构建…
       </button>
       <div class="bg-border mx-1 my-1 h-px" aria-hidden="true" />
+      <button
+        type="button"
+        role="menuitem"
+        class="text-destructive hover:bg-destructive/10 flex w-full cursor-pointer items-center gap-2 rounded-md border-none bg-transparent px-2 py-1.5 text-left text-[clamp(11px,1.25vw,12px)] transition-colors focus-visible:outline-none"
+        title="移除队列下的全部项目卡片，队列保留，项目文件不受影响"
+        @click="emit('clear-queue')"
+      >
+        <Eraser class="size-3.5 shrink-0" />
+        清空队列
+      </button>
       <button
         type="button"
         role="menuitem"

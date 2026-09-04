@@ -4,6 +4,7 @@ import { onUnmounted, ref, watch } from "vue"
 import SettingSection from "./SettingSection.vue"
 import SettingCard from "./SettingCard.vue"
 import SettingSelect from "./SettingSelect.vue"
+import SettingSwitch from "./SettingSwitch.vue"
 import { saveSettings, settings, type CloseBehavior } from "@/lib/settings"
 import {
   SHORTCUT_LABELS,
@@ -25,6 +26,13 @@ const closeOptions: { value: CloseBehavior; label: string }[] = [
 
 watch(
   () => settings.closeBehavior,
+  () => {
+    saveSettings()
+  }
+)
+
+watch(
+  () => settings.systemNotify,
   () => {
     saveSettings()
   }
@@ -95,6 +103,15 @@ onUnmounted(stopListening)
           v-model="settings.closeBehavior"
           :options="closeOptions"
         />
+      </SettingCard>
+    </SettingSection>
+
+    <SettingSection title="系统通知">
+      <SettingCard
+        title="Windows 系统通知"
+        description="构建完成、批量配置、记录/导入完成、批量删除等重要结果，额外推送一条系统通知；应用内提示始终显示，普通操作不会打扰"
+      >
+        <SettingSwitch v-model="settings.systemNotify" />
       </SettingCard>
     </SettingSection>
 

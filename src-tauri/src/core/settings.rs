@@ -29,6 +29,11 @@ pub struct AppSettings {
     /// entry use the frontend defaults.
     #[serde(default)]
     pub shortcuts: std::collections::HashMap<String, String>,
+    /// Also raise a Windows system notification for the important results
+    /// (long builds, batch configuration, bulk deletions…). The in-app
+    /// toasts are shown either way.
+    #[serde(default = "default_system_notify")]
+    pub system_notify: bool,
 }
 
 /// One Gradle environment: an installation directory picked in the
@@ -48,6 +53,12 @@ pub fn default_theme_mode() -> String {
     "system".to_string()
 }
 
+/// System notifications are on by default; settings files written before
+/// the option existed simply lack the field.
+pub fn default_system_notify() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -56,6 +67,7 @@ impl Default for AppSettings {
             theme_mode: default_theme_mode(),
             gradle_envs: Vec::new(),
             shortcuts: std::collections::HashMap::new(),
+            system_notify: default_system_notify(),
         }
     }
 }

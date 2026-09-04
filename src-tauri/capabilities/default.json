@@ -16,6 +16,7 @@
     "core:window:allow-start-dragging",
     "opener:default",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "notification:default"
   ]
 }

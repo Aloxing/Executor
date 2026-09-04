@@ -107,6 +107,12 @@ export async function removeBuildProject(
   })
 }
 
+/** Clears every project record of one queue; the queue itself is kept
+ * and files are never touched. */
+export async function clearBuildQueue(queueUuid: string): Promise<BuildQueue> {
+  return invoke<BuildQueue>("clear_build_queue", { queueUuid })
+}
+
 /** Runs the build flow of one project; output streams through the
  * `build-log` event (multi-line chunks) while the promise stays pending
  * until the end. */

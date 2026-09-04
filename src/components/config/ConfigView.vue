@@ -18,6 +18,7 @@ import type { AndroidProject } from "@/lib/android"
 import { addBuildProject, createBuildQueue, listBuildQueues } from "@/lib/build"
 import { byCreatedAt, generateUuid } from "@/lib/queues"
 import { navigateTo } from "@/lib/nav"
+import { notifySystem } from "@/lib/notify"
 import { pendingBuildRequest } from "@/lib/pipeline"
 import {
   addConfigProject,
@@ -388,6 +389,7 @@ function requestBatchDelete() {
         exitSelectMode()
         await reload()
         showToast("所选队列已删除", "success")
+        notifySystem("批量删除完成", `已删除 ${uuids.length} 个配置队列`)
       },
     }
   } else {
@@ -403,6 +405,10 @@ function requestBatchDelete() {
         exitSelectMode()
         await reload()
         showToast("所选项目已删除", "success")
+        notifySystem(
+          "批量删除完成",
+          `已删除 ${uuids.length} 个配置项目及其复制目录`
+        )
       },
     }
   }
@@ -491,8 +497,11 @@ async function confirmExecute() {
     // The backend marks the project as code-copied; refresh local state.
     await reload()
     showToast(summary, "success")
+    notifySystem("完善配置完成", `「${target.name}」：${summary}`)
   } catch (e) {
-    showToast(typeof e === "string" ? e : "启动失败，请重试")
+    const message = typeof e === "string" ? e : "启动失败，请重试"
+    showToast(message)
+    notifySystem("完善配置失败", `「${target.name}」：${message}`)
   } finally {
     executingUuid.value = ""
   }
@@ -575,6 +584,12 @@ async function runBatchTemplate(templateName: string, start: boolean) {
         failed.length ? `，失败 ${failed.length} 个（${failed.join("；")}）` : ""
       }`,
       failed.length ? "info" : "success"
+    )
+    notifySystem(
+      "批量配置完成",
+      `队列「${queue.name}」：成功 ${done} 个${
+        failed.length ? `，失败 ${failed.length} 个` : ""
+      }`
     )
     // Full pipeline: configured projects continue to the build area.
     if (start && done) await transferToBuild(queue.name)
@@ -678,8 +693,11 @@ async function onRecordProject(queue: ConfigQueue, project: ConfigProject) {
     const updated = await recordConfigProject(queue.uuid, project.uuid)
     replaceQueue(updated)
     showToast(`项目「${project.name}」记录完成`, "success")
+    notifySystem("记录完成", `项目「${project.name}」内容已复制到配置区`)
   } catch (e) {
-    showToast(typeof e === "string" ? e : "记录失败，请重试")
+    const message = typeof e === "string" ? e : "记录失败，请重试"
+    showToast(message)
+    notifySystem("记录失败", `「${project.name}」：${message}`)
   } finally {
     addingUuid.value = ""
   }
@@ -792,8 +810,14 @@ async function onRecordAll() {
     const updated = await recordAllConfigProjects(queue.uuid)
     replaceQueue(updated)
     showToast(`队列「${queue.name}」记录完成`, "success")
+    notifySystem(
+      "记录完成",
+      `队列「${queue.name}」共 ${queue.projects.length} 个项目已复制到配置区`
+    )
   } catch (e) {
-    showToast(typeof e === "string" ? e : "记录失败，请重试")
+    const message = typeof e === "string" ? e : "记录失败，请重试"
+    showToast(message)
+    notifySystem("记录失败", `队列「${queue.name}」：${message}`)
   } finally {
     addingUuid.value = ""
   }
